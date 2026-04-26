@@ -6,10 +6,9 @@
 import type {
   AgentMeta,
   ChatMessage,
-  CreateSessionArgs,
-  ObservationEvent,
-  ObservationSource,
-  SessionMeta,
+  CreateWorkspaceArgs,
+  WorkspaceEvent,
+  WorkspaceMeta,
   TabMeta,
 } from '@shared/types'
 
@@ -19,37 +18,32 @@ export interface StorageAdapter {
   getAgent(agentId: string): Promise<AgentMeta>
   ensureDefaultAgent(): Promise<AgentMeta>
 
-  // ----- Sessions (scoped by agentId) -----
-  listSessions(agentId: string): Promise<SessionMeta[]>
-  getSession(agentId: string, sessionId: string): Promise<SessionMeta>
-  createSession(agentId: string, args: CreateSessionArgs): Promise<SessionMeta>
+  // ----- Workspaces (scoped by agentId) -----
+  listWorkspaces(agentId: string): Promise<WorkspaceMeta[]>
+  getWorkspace(agentId: string, workspaceId: string): Promise<WorkspaceMeta>
+  createWorkspace(agentId: string, args: CreateWorkspaceArgs): Promise<WorkspaceMeta>
   /**
-   * 把一个已有的外部文件夹纳为 session(类比 `git init`)。
-   * 会在该文件夹下建 `.silent/` + meta.yaml + 其他内部文件,并登记到 agent 的 sessions 索引。
-   * 返回的 SessionMeta.path 是传入的 wsPath(绝对路径)。
+   * 把一个已有的外部文件夹纳为 workspace(类比 `git init`)。
+   * 会在该文件夹下建 `.silent/` + meta.yaml + 其他内部文件,并登记到 agent 的 workspaces 索引。
+   * 返回的 WorkspaceMeta.path 是传入的 wsPath(绝对路径)。
    */
-  addWorkspace(agentId: string, wsPath: string, name?: string): Promise<SessionMeta>
-  /** 把 sessionId 解析到绝对 workspace path(默认位置或外部) */
-  resolveSessionPath(agentId: string, sessionId: string): Promise<string>
-  renameSession(agentId: string, sessionId: string, name: string): Promise<void>
-  deleteSession(agentId: string, sessionId: string): Promise<void>
-  touchSession(agentId: string, sessionId: string): Promise<void>
+  addWorkspace(agentId: string, wsPath: string, name?: string): Promise<WorkspaceMeta>
+  /** 把 workspaceId 解析到绝对 workspace path(默认位置或外部) */
+  resolveWorkspacePath(agentId: string, workspaceId: string): Promise<string>
+  renameWorkspace(agentId: string, workspaceId: string, name: string): Promise<void>
+  deleteWorkspace(agentId: string, workspaceId: string): Promise<void>
+  touchWorkspace(agentId: string, workspaceId: string): Promise<void>
 
   // ----- Messages -----
-  loadMessages(agentId: string, sessionId: string): Promise<ChatMessage[]>
-  appendMessage(agentId: string, sessionId: string, msg: ChatMessage): Promise<void>
+  loadMessages(agentId: string, workspaceId: string): Promise<ChatMessage[]>
+  appendMessage(agentId: string, workspaceId: string, msg: ChatMessage): Promise<void>
 
-  // ----- Observation -----
-  appendObservation(
-    agentId: string,
-    sessionId: string,
-    source: ObservationSource,
-    event: ObservationEvent,
-  ): Promise<void>
+  // ----- Events (workspace 级单一时间线) -----
+  appendEvent(agentId: string, workspaceId: string, event: WorkspaceEvent): Promise<void>
 
-  // ----- Tabs (per session) -----
-  getTabs(agentId: string, sessionId: string): Promise<TabMeta[]>
-  setTabs(agentId: string, sessionId: string, tabs: TabMeta[]): Promise<void>
+  // ----- Tabs (per workspace) -----
+  getTabs(agentId: string, workspaceId: string): Promise<TabMeta[]>
+  setTabs(agentId: string, workspaceId: string, tabs: TabMeta[]): Promise<void>
 
   // ----- App state -----
   getAppState(): Promise<AppState>
@@ -58,6 +52,6 @@ export interface StorageAdapter {
 
 export interface AppState {
   lastAgentId?: string
-  lastSessionId?: Record<string, string>  // agentId → sessionId
+  lastWorkspaceId?: Record<string, string>  // agentId → workspaceId
   windowBounds?: { x: number; y: number; width: number; height: number }
 }

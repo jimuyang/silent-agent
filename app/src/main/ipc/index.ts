@@ -6,16 +6,16 @@ import { ipcMain } from 'electron'
 
 import { IPC } from '@shared/ipc'
 import { AgentRegistry } from '../agent/registry'
-import { SessionService } from '../agent/session'
+import { WorkspaceService } from '../agent/workspace'
 import type { StorageAdapter } from '../storage/adapter'
 import { registerAgentIpc } from './agent'
-import { registerSessionIpc } from './session'
+import { registerWorkspaceIpc } from './workspace'
 import { registerTabIpc } from './tab'
 import { registerFileIpc } from './file'
 
 export interface IpcDeps {
   registry: AgentRegistry
-  sessions: SessionService
+  workspaces: WorkspaceService
   storage: StorageAdapter
 }
 
@@ -24,7 +24,7 @@ export function registerAllIpc(deps: IpcDeps) {
   ipcMain.handle(IPC.PING, () => ({ pong: true, at: new Date().toISOString() }))
 
   registerAgentIpc(deps.registry)
-  registerSessionIpc(deps.sessions)
+  registerWorkspaceIpc(deps.workspaces)
   // tab handler 是全局注册,每个窗口的 TabManager 在 main/index.ts 里 registerTabManager 单独挂入
   registerTabIpc()
   registerFileIpc(deps.storage)

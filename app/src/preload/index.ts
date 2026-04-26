@@ -9,8 +9,8 @@ import { IPC, ptyChannel } from '../shared/ipc'
 import type {
   AgentMeta,
   ChatMessage,
-  CreateSessionArgs,
-  SessionMeta,
+  CreateWorkspaceArgs,
+  WorkspaceMeta,
   TabMeta,
 } from '../shared/types'
 
@@ -32,25 +32,25 @@ const api = {
     list: () => ipcRenderer.invoke(IPC.AGENT_LIST) as Promise<AgentMeta[]>,
   },
 
-  session: {
-    list: () => ipcRenderer.invoke(IPC.SESSION_LIST) as Promise<SessionMeta[]>,
-    create: (args: CreateSessionArgs) =>
-      ipcRenderer.invoke(IPC.SESSION_CREATE, args) as Promise<SessionMeta>,
-    addWorkspace: (path: string, name?: string) =>
-      ipcRenderer.invoke(IPC.SESSION_ADD_WORKSPACE, { path, name }) as Promise<SessionMeta>,
+  workspace: {
+    list: () => ipcRenderer.invoke(IPC.WORKSPACE_LIST) as Promise<WorkspaceMeta[]>,
+    create: (args: CreateWorkspaceArgs) =>
+      ipcRenderer.invoke(IPC.WORKSPACE_CREATE, args) as Promise<WorkspaceMeta>,
+    add: (path: string, name?: string) =>
+      ipcRenderer.invoke(IPC.WORKSPACE_ADD, { path, name }) as Promise<WorkspaceMeta>,
     rename: (id: string, name: string) =>
-      ipcRenderer.invoke(IPC.SESSION_RENAME, { id, name }) as Promise<void>,
+      ipcRenderer.invoke(IPC.WORKSPACE_RENAME, { id, name }) as Promise<void>,
     delete: (id: string) =>
-      ipcRenderer.invoke(IPC.SESSION_DELETE, id) as Promise<void>,
+      ipcRenderer.invoke(IPC.WORKSPACE_DELETE, id) as Promise<void>,
     loadMessages: (id: string) =>
-      ipcRenderer.invoke(IPC.SESSION_LOAD_MESSAGES, id) as Promise<ChatMessage[]>,
+      ipcRenderer.invoke(IPC.WORKSPACE_LOAD_MESSAGES, id) as Promise<ChatMessage[]>,
   },
 
   tab: {
-    list: (sessionId: string) =>
-      ipcRenderer.invoke(IPC.TAB_LIST, sessionId) as Promise<TabMeta[]>,
-    open: (sessionId: string, args: OpenTabArgs) =>
-      ipcRenderer.invoke(IPC.TAB_OPEN, { sessionId, args }) as Promise<TabMeta>,
+    list: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.TAB_LIST, workspaceId) as Promise<TabMeta[]>,
+    open: (workspaceId: string, args: OpenTabArgs) =>
+      ipcRenderer.invoke(IPC.TAB_OPEN, { workspaceId, args }) as Promise<TabMeta>,
     close: (tabId: string) =>
       ipcRenderer.invoke(IPC.TAB_CLOSE, tabId) as Promise<void>,
     focus: (tabId: string) =>
@@ -60,8 +60,8 @@ const api = {
       ipcRenderer.invoke(IPC.TAB_SET_BOUNDS, bounds) as Promise<void>,
     navigate: (tabId: string, url: string) =>
       ipcRenderer.invoke(IPC.TAB_NAVIGATE, { tabId, url }) as Promise<void>,
-    switchSession: (sessionId: string) =>
-      ipcRenderer.invoke(IPC.TAB_SWITCH_SESSION, sessionId) as Promise<TabMeta[]>,
+    switchWorkspace: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.TAB_SWITCH_WORKSPACE, workspaceId) as Promise<TabMeta[]>,
     popupTypeMenu: () =>
       ipcRenderer.invoke(IPC.TAB_POPUP_TYPE_MENU) as Promise<
         'browser' | 'terminal' | 'file' | 'file-new' | null
@@ -74,8 +74,8 @@ const api = {
     read: (path: string) => ipcRenderer.invoke(IPC.FILE_READ, path) as Promise<string>,
     write: (path: string, content: string) =>
       ipcRenderer.invoke(IPC.FILE_WRITE, { path, content }) as Promise<void>,
-    createInSession: (sessionId: string, filename: string) =>
-      ipcRenderer.invoke(IPC.FILE_CREATE_IN_SESSION, { sessionId, filename }) as Promise<string>,
+    createInWorkspace: (workspaceId: string, filename: string) =>
+      ipcRenderer.invoke(IPC.FILE_CREATE_IN_WORKSPACE, { workspaceId, filename }) as Promise<string>,
     listDir: (absPath: string) =>
       ipcRenderer.invoke(IPC.FILE_LIST_DIR, absPath) as Promise<
         Array<{ name: string; isDir: boolean }>

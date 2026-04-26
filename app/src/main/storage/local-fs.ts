@@ -10,10 +10,9 @@ import type { StorageAdapter, AppState } from './adapter'
 import type {
   AgentMeta,
   ChatMessage,
-  CreateSessionArgs,
-  ObservationEvent,
-  ObservationSource,
-  SessionMeta,
+  CreateWorkspaceArgs,
+  WorkspaceEvent,
+  WorkspaceMeta,
   TabMeta,
 } from '@shared/types'
 import {
@@ -29,12 +28,12 @@ import { readYaml, writeYamlAtomic, readJson, writeJsonAtomic } from './yaml'
 const DEFAULT_AGENT_ID = 'silent-default'
 
 /** _index.json 条目:有 path 是外部 workspace, 无 path 是默认托管位置 */
-interface SessionIndexEntry {
+interface WorkspaceIndexEntry {
   id: string
   path?: string
 }
-interface SessionIndex {
-  entries: SessionIndexEntry[]
+interface WorkspaceIndex {
+  entries: WorkspaceIndexEntry[]
 }
 
 function nowIso() {
@@ -140,7 +139,7 @@ export class LocalFsAdapter implements StorageAdapter {
     await mkdir(P.agentMemoryDir(meta.id), { recursive: true })
     await mkdir(P.agentSkillsDir(meta.id), { recursive: true })
     await mkdir(P.agentKnowledgeDir(meta.id), { recursive: true })
-    await mkdir(P.sessionsDir(meta.id), { recursive: true })
+    await mkdir(P.workspacesDir(meta.id), { recursive: true })
     await writeYamlAtomic(P.agentMetaFile(meta.id), meta)
     await this.addAgentToIndex(meta.id)
     return meta
@@ -170,82 +169,81 @@ export class LocalFsAdapter implements StorageAdapter {
     }
   }
 
-  // ============ Sessions ============
+  // ============ Workspaces ============
   // _index.json 格式演进:
-  //   老: { ids: string[] }                      (只记录 id, 物理位置=默认 sessionDir)
+  //   老: { ids: string[] }                      (只记录 id, 物理位置=默认 managedWorkspaceDir)
   //   新: { entries: [{id, path?}] }             (path 可选; 没填 → 默认位置, 有填 → 外部文件夹)
   // 读时自动 upgrade;只在有人 write 时持久化新格式。
 
-  /** in-memory cache: sessionId → 绝对 workspace path */
+  /** in-memory cache: workspaceId → 绝对 workspace path */
   private pathCache = new Map<string, string>()
 
-  private async readSessionsIndex(agentId: string): Promise<SessionIndex> {
-    type LegacyIndex = { ids?: string[]; entries?: SessionIndexEntry[] }
-    const raw = await readJson<LegacyIndex>(P.sessionsIndexFile(agentId), {})
+  private async readWorkspacesIndex(agentId: string): Promise<WorkspaceIndex> {
+    type LegacyIndex = { ids?: string[]; entries?: WorkspaceIndexEntry[] }
+    const raw = await readJson<LegacyIndex>(P.workspacesIndexFile(agentId), {})
     if (raw.entries) return { entries: raw.entries }
     // 迁移老格式
     if (raw.ids) return { entries: raw.ids.map((id) => ({ id })) }
     return { entries: [] }
   }
 
-  private async writeSessionsIndex(agentId: string, idx: SessionIndex): Promise<void> {
-    await writeJsonAtomic(P.sessionsIndexFile(agentId), idx)
+  private async writeWorkspacesIndex(agentId: string, idx: WorkspaceIndex): Promise<void> {
+    await writeJsonAtomic(P.workspacesIndexFile(agentId), idx)
   }
 
-  /** 解析 sessionId 到绝对 workspace 路径。默认位置或外部皆可。 */
-  async resolveSessionPath(agentId: string, sessionId: string): Promise<string> {
-    const cached = this.pathCache.get(sessionId)
+  /** 解析 workspaceId 到绝对 workspace 路径。默认位置或外部皆可。 */
+  async resolveWorkspacePath(agentId: string, workspaceId: string): Promise<string> {
+    const cached = this.pathCache.get(workspaceId)
     if (cached) return cached
-    const idx = await this.readSessionsIndex(agentId)
-    const entry = idx.entries.find((e) => e.id === sessionId)
-    const wsPath = entry?.path ?? P.sessionDir(agentId, sessionId)
-    this.pathCache.set(sessionId, wsPath)
+    const idx = await this.readWorkspacesIndex(agentId)
+    const entry = idx.entries.find((e) => e.id === workspaceId)
+    const wsPath = entry?.path ?? P.managedWorkspaceDir(agentId, workspaceId)
+    this.pathCache.set(workspaceId, wsPath)
     return wsPath
   }
 
-  async listSessions(agentId: string): Promise<SessionMeta[]> {
-    let idx = await this.readSessionsIndex(agentId)
-    const sessions: SessionMeta[] = []
+  async listWorkspaces(agentId: string): Promise<WorkspaceMeta[]> {
+    const idx = await this.readWorkspacesIndex(agentId)
+    const workspaces: WorkspaceMeta[] = []
     for (const entry of idx.entries) {
-      const wsPath = entry.path ?? P.sessionDir(agentId, entry.id)
+      const wsPath = entry.path ?? P.managedWorkspaceDir(agentId, entry.id)
       this.pathCache.set(entry.id, wsPath)
       try {
-        const meta = await readYaml<SessionMeta>(P.workspaceMetaFile(wsPath))
-        // 对 renderer 暴露的 SessionMeta 永远带 path(绝对路径),便于文件树等组件使用
-        sessions.push({ ...meta, path: wsPath })
+        const meta = await readYaml<WorkspaceMeta>(P.workspaceMetaFile(wsPath))
+        // 对 renderer 暴露的 WorkspaceMeta 永远带 path(绝对路径),便于文件树等组件使用
+        workspaces.push({ ...meta, path: wsPath })
       } catch {
         /* skip broken */
       }
     }
-    if (sessions.length === 0 && idx.entries.length === 0) {
-      return this.rebuildSessionsIndex(agentId)
+    if (workspaces.length === 0 && idx.entries.length === 0) {
+      return this.rebuildWorkspacesIndex(agentId)
     }
-    sessions.sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
-    return sessions
+    workspaces.sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
+    return workspaces
   }
 
-  async getSession(agentId: string, sessionId: string): Promise<SessionMeta> {
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
-    const meta = await readYaml<SessionMeta>(P.workspaceMetaFile(wsPath))
+  async getWorkspace(agentId: string, workspaceId: string): Promise<WorkspaceMeta> {
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
+    const meta = await readYaml<WorkspaceMeta>(P.workspaceMetaFile(wsPath))
     meta.path = wsPath  // 永远带绝对路径
     return meta
   }
 
-  async createSession(agentId: string, args: CreateSessionArgs): Promise<SessionMeta> {
+  async createWorkspace(agentId: string, args: CreateWorkspaceArgs): Promise<WorkspaceMeta> {
     const now = new Date()
-    const nameInput = args.name?.trim() || '新会话'
-    const id = `${yymmdd(now)}-${shortHash(2)}-${slugify(nameInput) || 'session'}`
-    const wsPath = P.sessionDir(agentId, id)  // 默认托管位置
-    const meta: SessionMeta = {
+    const nameInput = args.name?.trim() || '新工作区'
+    const id = `${yymmdd(now)}-${shortHash(2)}-${slugify(nameInput) || 'workspace'}`
+    const wsPath = P.managedWorkspaceDir(agentId, id)  // 默认托管位置
+    const meta: WorkspaceMeta = {
       id,
-      type: args.type ?? 'chat',
       name: nameInput,
       linkedFolder: args.linkedFolder,
       createdAt: now.toISOString(),
       lastActiveAt: now.toISOString(),
     }
     await this.initWorkspaceAt(wsPath, meta)
-    await this.addSessionToIndex(agentId, { id })  // 无 path = 默认位置
+    await this.addWorkspaceToIndex(agentId, { id })  // 无 path = 默认位置
     this.pathCache.set(id, wsPath)
     return meta
   }
@@ -254,31 +252,30 @@ export class LocalFsAdapter implements StorageAdapter {
     agentId: string,
     wsPath: string,
     name?: string,
-  ): Promise<SessionMeta> {
+  ): Promise<WorkspaceMeta> {
     const now = new Date()
     const nameInput = name?.trim() || wsPath.split('/').filter(Boolean).pop() || '工作区'
     const id = `${yymmdd(now)}-${shortHash(2)}-${slugify(nameInput) || 'workspace'}`
-    const meta: SessionMeta = {
+    const meta: WorkspaceMeta = {
       id,
-      type: 'chat',     // 旧字段,不再分支
       name: nameInput,
       path: wsPath,
       createdAt: now.toISOString(),
       lastActiveAt: now.toISOString(),
     }
     await this.initWorkspaceAt(wsPath, meta)
-    await this.addSessionToIndex(agentId, { id, path: wsPath })
+    await this.addWorkspaceToIndex(agentId, { id, path: wsPath })
     this.pathCache.set(id, wsPath)
     return meta
   }
 
   /** 在任意路径建 `.silent/` + meta + 初始 tabs.json。创 silent-chat tab。幂等。 */
-  private async initWorkspaceAt(wsPath: string, meta: SessionMeta): Promise<void> {
+  private async initWorkspaceAt(wsPath: string, meta: WorkspaceMeta): Promise<void> {
     await mkdir(P.workspaceStateDir(wsPath), { recursive: true })
     await writeYamlAtomic(P.workspaceMetaFile(wsPath), meta)
     const silentChatTab: TabMeta = {
       id: SILENT_CHAT_TAB_ID,
-      sessionId: meta.id,
+      workspaceId: meta.id,
       type: 'silent-chat',
       title: 'Silent Chat',
       pinned: true,
@@ -293,110 +290,108 @@ export class LocalFsAdapter implements StorageAdapter {
     }
   }
 
-  async renameSession(agentId: string, sessionId: string, name: string): Promise<void> {
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
-    const meta = await readYaml<SessionMeta>(P.workspaceMetaFile(wsPath))
+  async renameWorkspace(agentId: string, workspaceId: string, name: string): Promise<void> {
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
+    const meta = await readYaml<WorkspaceMeta>(P.workspaceMetaFile(wsPath))
     meta.name = name
     meta.lastActiveAt = nowIso()
     await writeYamlAtomic(P.workspaceMetaFile(wsPath), meta)
   }
 
-  async deleteSession(agentId: string, sessionId: string): Promise<void> {
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
-    const idx = await this.readSessionsIndex(agentId)
-    const entry = idx.entries.find((e) => e.id === sessionId)
+  async deleteWorkspace(agentId: string, workspaceId: string): Promise<void> {
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
+    const idx = await this.readWorkspacesIndex(agentId)
+    const entry = idx.entries.find((e) => e.id === workspaceId)
     if (entry?.path) {
-      // 外部 session: 只删 .silent/(不动用户文件)
+      // 外部 workspace: 只删 .silent/(不动用户文件)
       await rm(P.workspaceInternalDir(wsPath), { recursive: true, force: true })
     } else {
-      // 默认位置: 整个 session 目录删
+      // 默认位置: 整个 workspace 目录删
       await rm(wsPath, { recursive: true, force: true })
     }
-    await this.removeSessionFromIndex(agentId, sessionId)
-    this.pathCache.delete(sessionId)
+    await this.removeWorkspaceFromIndex(agentId, workspaceId)
+    this.pathCache.delete(workspaceId)
   }
 
-  async touchSession(agentId: string, sessionId: string): Promise<void> {
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
-    const meta = await readYaml<SessionMeta>(P.workspaceMetaFile(wsPath))
+  async touchWorkspace(agentId: string, workspaceId: string): Promise<void> {
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
+    const meta = await readYaml<WorkspaceMeta>(P.workspaceMetaFile(wsPath))
     meta.lastActiveAt = nowIso()
     await writeYamlAtomic(P.workspaceMetaFile(wsPath), meta)
   }
 
-  private async rebuildSessionsIndex(agentId: string): Promise<SessionMeta[]> {
-    const dir = P.sessionsDir(agentId)
+  private async rebuildWorkspacesIndex(agentId: string): Promise<WorkspaceMeta[]> {
+    const dir = P.workspacesDir(agentId)
     await mkdir(dir, { recursive: true })
     const dirents = await readdir(dir, { withFileTypes: true }).catch(() => [])
-    const entries: SessionIndexEntry[] = dirents
+    const entries: WorkspaceIndexEntry[] = dirents
       .filter((e) => e.isDirectory() && !e.name.startsWith('_'))
       .map((e) => ({ id: e.name }))
-    await this.writeSessionsIndex(agentId, { entries })
-    const sessions: SessionMeta[] = []
+    await this.writeWorkspacesIndex(agentId, { entries })
+    const workspaces: WorkspaceMeta[] = []
     for (const entry of entries) {
       try {
-        sessions.push(await this.getSession(agentId, entry.id))
+        workspaces.push(await this.getWorkspace(agentId, entry.id))
       } catch {
         /* skip */
       }
     }
-    sessions.sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
-    return sessions
+    workspaces.sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
+    return workspaces
   }
 
-  private async addSessionToIndex(
+  private async addWorkspaceToIndex(
     agentId: string,
-    entry: SessionIndexEntry,
+    entry: WorkspaceIndexEntry,
   ): Promise<void> {
-    const idx = await this.readSessionsIndex(agentId)
+    const idx = await this.readWorkspacesIndex(agentId)
     if (!idx.entries.some((e) => e.id === entry.id)) {
       idx.entries.push(entry)
-      await this.writeSessionsIndex(agentId, idx)
+      await this.writeWorkspacesIndex(agentId, idx)
     }
   }
 
-  private async removeSessionFromIndex(
+  private async removeWorkspaceFromIndex(
     agentId: string,
-    sessionId: string,
+    workspaceId: string,
   ): Promise<void> {
-    const idx = await this.readSessionsIndex(agentId)
-    idx.entries = idx.entries.filter((e) => e.id !== sessionId)
-    await this.writeSessionsIndex(agentId, idx)
+    const idx = await this.readWorkspacesIndex(agentId)
+    idx.entries = idx.entries.filter((e) => e.id !== workspaceId)
+    await this.writeWorkspacesIndex(agentId, idx)
   }
 
   // ============ Messages ============
 
-  async loadMessages(agentId: string, sessionId: string): Promise<ChatMessage[]> {
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
+  async loadMessages(agentId: string, workspaceId: string): Promise<ChatMessage[]> {
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
     return readLines<ChatMessage>(P.workspaceMessagesFile(wsPath))
   }
 
   async appendMessage(
     agentId: string,
-    sessionId: string,
+    workspaceId: string,
     msg: ChatMessage,
   ): Promise<void> {
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
     await appendLine(P.workspaceMessagesFile(wsPath), msg)
-    await this.touchSession(agentId, sessionId).catch(() => {})
+    await this.touchWorkspace(agentId, workspaceId).catch(() => {})
   }
 
-  // ============ Observation ============
+  // ============ Events ============
 
-  async appendObservation(
+  async appendEvent(
     agentId: string,
-    sessionId: string,
-    _source: ObservationSource,
-    event: ObservationEvent,
+    workspaceId: string,
+    event: WorkspaceEvent,
   ): Promise<void> {
-    // 统一走 session 级 events.jsonl, 老的 context/<source>.jsonl 弃用
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
     await appendLine(P.workspaceEventsFile(wsPath), event)
   }
 
   // ============ Tabs ============
 
-  async getTabs(agentId: string, sessionId: string): Promise<TabMeta[]> {
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
+  async getTabs(agentId: string, workspaceId: string): Promise<TabMeta[]> {
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
     const data = await readJson<{ tabs: TabMeta[] }>(
       P.workspaceTabsFile(wsPath),
       { tabs: [] },
@@ -407,10 +402,10 @@ export class LocalFsAdapter implements StorageAdapter {
 
   async setTabs(
     agentId: string,
-    sessionId: string,
+    workspaceId: string,
     tabs: TabMeta[],
   ): Promise<void> {
-    const wsPath = await this.resolveSessionPath(agentId, sessionId)
+    const wsPath = await this.resolveWorkspacePath(agentId, workspaceId)
     await writeJsonAtomic(P.workspaceTabsFile(wsPath), { tabs })
   }
 

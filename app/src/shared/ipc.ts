@@ -1,5 +1,5 @@
 // IPC channel 名称常量, main 和 renderer 都 import 这里, 避免打字错。
-// 命名约定:资源.动作 (agent.current / session.create)。
+// 命名约定:资源.动作 (agent.current / workspace.create)。
 // 非 Electron 专属 - 这里只是字符串表, 两端各取所需。
 
 export const IPC = {
@@ -10,13 +10,13 @@ export const IPC = {
   AGENT_CURRENT: 'agent.current',
   AGENT_LIST: 'agent.list',
 
-  // session
-  SESSION_LIST: 'session.list',
-  SESSION_CREATE: 'session.create',
-  SESSION_ADD_WORKSPACE: 'session.addWorkspace',
-  SESSION_RENAME: 'session.rename',
-  SESSION_DELETE: 'session.delete',
-  SESSION_LOAD_MESSAGES: 'session.loadMessages',
+  // workspace
+  WORKSPACE_LIST: 'workspace.list',
+  WORKSPACE_CREATE: 'workspace.create',
+  WORKSPACE_ADD: 'workspace.add',
+  WORKSPACE_RENAME: 'workspace.rename',
+  WORKSPACE_DELETE: 'workspace.delete',
+  WORKSPACE_LOAD_MESSAGES: 'workspace.loadMessages',
 
   // tab
   TAB_LIST: 'tab.list',
@@ -26,7 +26,7 @@ export const IPC = {
   TAB_SET_BOUNDS: 'tab.setBounds',
   TAB_HIDE_ALL: 'tab.hideAll',
   TAB_NAVIGATE: 'tab.navigate',
-  TAB_SWITCH_SESSION: 'tab.switchSession',
+  TAB_SWITCH_WORKSPACE: 'tab.switchWorkspace',
   TAB_POPUP_TYPE_MENU: 'tab.popupTypeMenu',
 
   // terminal (main ↔ renderer, per-tab 事件信道是动态拼 tabId,不在这里枚举)
@@ -38,7 +38,7 @@ export const IPC = {
   FILE_READ: 'file.read',
   FILE_WRITE: 'file.write',
   FILE_PICK_OPEN: 'file.pickOpen',
-  FILE_CREATE_IN_SESSION: 'file.createInSession',
+  FILE_CREATE_IN_WORKSPACE: 'file.createInWorkspace',
   FILE_LIST_DIR: 'file.listDir',
 } as const
 

@@ -5,7 +5,7 @@
 export const ipc = {
   ping: () => window.api.ping(),
   agent: window.api.agent,
-  session: window.api.session,
+  workspace: window.api.workspace,
   tab: window.api.tab,
   terminal: window.api.terminal,
   file: window.api.file,

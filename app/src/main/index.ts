@@ -8,7 +8,7 @@ import { join } from 'node:path'
 
 import { LocalFsAdapter } from './storage/local-fs'
 import { AgentRegistry } from './agent/registry'
-import { SessionService } from './agent/session'
+import { WorkspaceService } from './agent/workspace'
 import { registerAllIpc } from './ipc'
 import { TabManager } from './tabs/manager'
 import { registerTabManager, unregisterTabManager } from './ipc/tab'
@@ -64,14 +64,14 @@ app.whenReady().then(async () => {
   // ----- 装配业务层(纯 TS, 不碰 electron) -----
   const storage = new LocalFsAdapter()
   const registry = new AgentRegistry(storage)
-  const sessions = new SessionService(storage)
+  const workspaces = new WorkspaceService(storage)
 
-  // 启动 guard:保证 default agent + 至少一条 session 存在
+  // 启动 guard:保证 default agent + 至少一条 workspace 存在
   const defaultAgent = await registry.ensureDefault()
-  await sessions.ensureHasSession(defaultAgent.id)
+  await workspaces.ensureHasWorkspace(defaultAgent.id)
 
   // ----- IPC 注册(唯一 import electron 的业务入口) -----
-  registerAllIpc({ registry, sessions, storage })
+  registerAllIpc({ registry, workspaces, storage })
 
   // 先建窗口(还没 load renderer),避免 renderer 启动后 IPC 早于 manager 注册的竞态
   const win = createWindow()

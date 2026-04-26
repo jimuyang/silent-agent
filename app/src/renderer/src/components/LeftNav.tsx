@@ -1,25 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AgentMeta, SessionMeta } from '@shared/types'
+import type { AgentMeta, WorkspaceMeta } from '@shared/types'
 
 interface LeftNavProps {
   agent: AgentMeta | null
-  sessions: SessionMeta[]
-  activeSessionId: string | null
-  /** 窄模式:文件树打开时,LeftNav 折到 100px 左右,session 变 2 行卡片 */
+  workspaces: WorkspaceMeta[]
+  activeWorkspaceId: string | null
+  /** 窄模式:文件树打开时,LeftNav 折到 100px 左右,workspace 变 2 行卡片 */
   narrow?: boolean
-  onSelectSession: (id: string) => void
-  onCreateSession: (name: string | undefined) => Promise<void> | void
-  /** 点击 session 行的 `ws` tip:toggle 文件树 */
-  onToggleFileTree?: (sessionId: string) => void
+  onSelectWorkspace: (id: string) => void
+  onCreateWorkspace: (name: string | undefined) => Promise<void> | void
+  /** 点击 workspace 行的 `ws` tip:toggle 文件树 */
+  onToggleFileTree?: (workspaceId: string) => void
 }
 
 export default function LeftNav({
   agent,
-  sessions,
-  activeSessionId,
+  workspaces,
+  activeWorkspaceId,
   narrow = false,
-  onSelectSession,
-  onCreateSession,
+  onSelectWorkspace,
+  onCreateWorkspace,
   onToggleFileTree,
 }: LeftNavProps) {
   const [creating, setCreating] = useState(false)
@@ -34,7 +34,7 @@ export default function LeftNav({
     const name = draft.trim()
     setCreating(false)
     setDraft('')
-    await onCreateSession(name || undefined)
+    await onCreateWorkspace(name || undefined)
   }
 
   function cancel() {
@@ -105,10 +105,10 @@ export default function LeftNav({
 
       <div className="left-section">
         <div className="section-head">
-          <span>💬 会话</span>
+          <span>💬 工作区</span>
           <button
             className="btn-plus"
-            title="新建会话"
+            title="新建工作区"
             onClick={() => setCreating(true)}
           >
             ＋
@@ -116,11 +116,11 @@ export default function LeftNav({
         </div>
 
         {creating && (
-          <div className="session-create-row">
+          <div className="workspace-create-row">
             <input
               ref={inputRef}
-              className="session-create-input"
-              placeholder="会话名字 · Enter 建 · Esc 取消"
+              className="workspace-create-input"
+              placeholder="工作区名字 · Enter 建 · Esc 取消"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -134,19 +134,19 @@ export default function LeftNav({
           </div>
         )}
 
-        {!creating && sessions.length === 0 && (
+        {!creating && workspaces.length === 0 && (
           <div style={{ padding: '8px', color: 'var(--text-dim2)', fontSize: 11 }}>
-            无会话
+            无工作区
           </div>
         )}
 
-        {sessions.map((s) => (
-          <SessionItem
-            key={s.id}
-            session={s}
-            active={s.id === activeSessionId}
+        {workspaces.map((w) => (
+          <WorkspaceItem
+            key={w.id}
+            workspace={w}
+            active={w.id === activeWorkspaceId}
             narrow={narrow}
-            onSelect={() => onSelectSession(s.id)}
+            onSelect={() => onSelectWorkspace(w.id)}
             onToggleFileTree={onToggleFileTree}
           />
         ))}
@@ -155,34 +155,34 @@ export default function LeftNav({
   )
 }
 
-function SessionItem({
-  session,
+function WorkspaceItem({
+  workspace,
   active,
   narrow,
   onSelect,
   onToggleFileTree,
 }: {
-  session: SessionMeta
+  workspace: WorkspaceMeta
   active: boolean
   narrow: boolean
   onSelect: () => void
-  onToggleFileTree?: (sessionId: string) => void
+  onToggleFileTree?: (workspaceId: string) => void
 }) {
   return (
     <div
-      className={`session-item ${active ? 'active' : ''}`}
+      className={`workspace-item ${active ? 'active' : ''}`}
       onClick={onSelect}
-      title={session.path || session.id}
+      title={workspace.path || workspace.id}
     >
       <div className="si-line1">
-        <span className="si-name">{session.name}</span>
+        <span className="si-name">{workspace.name}</span>
         {/* ws tip 可点击 toggle 文件树 */}
         <span
           className="si-tag ws-tip"
           onClick={(e) => {
             e.stopPropagation()
             onSelect()
-            onToggleFileTree?.(session.id)
+            onToggleFileTree?.(workspace.id)
           }}
           title="点击查看工作区文件"
         >
@@ -191,16 +191,16 @@ function SessionItem({
         {active && <span className="live-dot" />}
       </div>
       {narrow && (
-        <div className="si-line2">{formatLine2(session)}</div>
+        <div className="si-line2">{formatLine2(workspace)}</div>
       )}
     </div>
   )
 }
 
-function formatLine2(s: SessionMeta): string {
+function formatLine2(w: WorkspaceMeta): string {
   // 外部挂载路径优先(短显示);否则显示"N 分钟/小时/天前"
-  if (s.linkedFolder) return abbrevPath(s.linkedFolder)
-  return relativeTime(s.lastActiveAt)
+  if (w.linkedFolder) return abbrevPath(w.linkedFolder)
+  return relativeTime(w.lastActiveAt)
 }
 
 function abbrevPath(p: string): string {

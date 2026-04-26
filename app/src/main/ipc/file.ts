@@ -41,13 +41,13 @@ export function registerFileIpc(storage: StorageAdapter) {
     },
   )
 
-  // 在当前 session 的 workspace 根目录下新建一个空文件,返回绝对路径。
+  // 在当前 workspace 根目录下新建一个空文件,返回绝对路径。
   // 拒绝:绝对路径 / 路径逃逸(..)/ 写入 .silent/ 或 .git/ 内部。
   ipcMain.handle(
-    IPC.FILE_CREATE_IN_SESSION,
-    async (event, payload: { sessionId: string; filename: string }) => {
+    IPC.FILE_CREATE_IN_WORKSPACE,
+    async (event, payload: { workspaceId: string; filename: string }) => {
       const agentId = agentIdFromEvent(event)
-      const wsPath = await storage.resolveSessionPath(agentId, payload.sessionId)
+      const wsPath = await storage.resolveWorkspacePath(agentId, payload.workspaceId)
 
       const clean = normalize(payload.filename.trim())
       if (

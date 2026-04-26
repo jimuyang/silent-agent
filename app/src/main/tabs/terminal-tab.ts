@@ -29,8 +29,8 @@ export class TerminalTabRuntime {
   // 落盘 buffer.log: pty 所有 stdout 同步 append(供外部 tail -f / agent 读)
   private bufferLogStream: WriteStream | null = null
 
-  /** 由 manager 注入,pty 退出等事件发给 session 级 events.jsonl */
-  onSessionEvent?: (evt: {
+  /** 由 manager 注入,pty 退出等事件发给 workspace 级 events.jsonl */
+  onWorkspaceEvent?: (evt: {
     source: 'shell'
     action: string
     target?: string
@@ -80,7 +80,7 @@ export class TerminalTabRuntime {
       if (!this.window.isDestroyed()) {
         this.window.webContents.send(ptyChannel.exit(meta.id), exitCode)
       }
-      this.onSessionEvent?.({
+      this.onWorkspaceEvent?.({
         source: 'shell',
         action: 'pty-exit',
         meta: { exitCode },

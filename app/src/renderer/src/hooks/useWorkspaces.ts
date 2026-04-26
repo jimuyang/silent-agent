@@ -1,25 +1,25 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { CreateSessionArgs, SessionMeta } from '@shared/types'
+import type { CreateWorkspaceArgs, WorkspaceMeta } from '@shared/types'
 import { ipc } from '../lib/ipc'
 
-export interface UseSessionsResult {
-  sessions: SessionMeta[]
+export interface UseWorkspacesResult {
+  workspaces: WorkspaceMeta[]
   loading: boolean
   reload: () => Promise<void>
-  create: (args: CreateSessionArgs) => Promise<SessionMeta>
+  create: (args: CreateWorkspaceArgs) => Promise<WorkspaceMeta>
   rename: (id: string, name: string) => Promise<void>
   remove: (id: string) => Promise<void>
 }
 
-export function useSessions(): UseSessionsResult {
-  const [sessions, setSessions] = useState<SessionMeta[]>([])
+export function useWorkspaces(): UseWorkspacesResult {
+  const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([])
   const [loading, setLoading] = useState(true)
 
   const reload = useCallback(async () => {
     setLoading(true)
     try {
-      const list = await ipc.session.list()
-      setSessions(list)
+      const list = await ipc.workspace.list()
+      setWorkspaces(list)
     } finally {
       setLoading(false)
     }
@@ -30,17 +30,17 @@ export function useSessions(): UseSessionsResult {
   }, [reload])
 
   const create = useCallback(
-    async (args: CreateSessionArgs) => {
-      const s = await ipc.session.create(args)
+    async (args: CreateWorkspaceArgs) => {
+      const w = await ipc.workspace.create(args)
       await reload()
-      return s
+      return w
     },
     [reload],
   )
 
   const rename = useCallback(
     async (id: string, name: string) => {
-      await ipc.session.rename(id, name)
+      await ipc.workspace.rename(id, name)
       await reload()
     },
     [reload],
@@ -48,11 +48,11 @@ export function useSessions(): UseSessionsResult {
 
   const remove = useCallback(
     async (id: string) => {
-      await ipc.session.delete(id)
+      await ipc.workspace.delete(id)
       await reload()
     },
     [reload],
   )
 
-  return { sessions, loading, reload, create, rename, remove }
+  return { workspaces, loading, reload, create, rename, remove }
 }

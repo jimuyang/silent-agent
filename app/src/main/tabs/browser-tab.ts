@@ -38,23 +38,23 @@ export class BrowserTabRuntime {
       this.onTitleChanged?.(this.meta.title)
     })
 
-    // navigation 变化 → 更新 state.url + 发 session 事件
+    // navigation 变化 → 更新 state.url + 发 workspace 事件
     this.view.webContents.on('did-navigate', (_e, url) => {
       ;(this.meta.state as BrowserTabState).url = url
       this.onUrlChanged?.(url)
-      this.onSessionEvent?.({ source: 'browser', action: 'navigate', target: url })
+      this.onWorkspaceEvent?.({ source: 'browser', action: 'navigate', target: url })
     })
     this.view.webContents.on('did-navigate-in-page', (_e, url) => {
       ;(this.meta.state as BrowserTabState).url = url
       this.onUrlChanged?.(url)
-      this.onSessionEvent?.({
+      this.onWorkspaceEvent?.({
         source: 'browser',
         action: 'navigate-in-page',
         target: url,
       })
     })
     this.view.webContents.on('did-finish-load', () => {
-      this.onSessionEvent?.({
+      this.onWorkspaceEvent?.({
         source: 'browser',
         action: 'load-finish',
         target: this.view.webContents.getURL(),
@@ -66,8 +66,8 @@ export class BrowserTabRuntime {
   /** 由 manager 注入, title/url 变化时回调触发持久化 */
   onTitleChanged?: (title: string) => void
   onUrlChanged?: (url: string) => void
-  /** 由 manager 注入,把 observation 事件写进 session 级 events.jsonl */
-  onSessionEvent?: (evt: {
+  /** 由 manager 注入,把 observation 事件写进 workspace 级 events.jsonl */
+  onWorkspaceEvent?: (evt: {
     source: 'browser'
     action: string
     target?: string

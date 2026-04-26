@@ -29,47 +29,20 @@ export const agentMemoryDir = (agentId: string) => join(agentDir(agentId), 'memo
 export const agentSkillsDir = (agentId: string) => join(agentDir(agentId), 'skills')
 export const agentKnowledgeDir = (agentId: string) => join(agentDir(agentId), 'knowledge')
 
-// --- Sessions (scoped by agent) ---
-export const sessionsDir = (agentId: string) => join(agentDir(agentId), 'sessions')
-export const sessionsIndexFile = (agentId: string) => join(sessionsDir(agentId), '_index.json')
+// --- Workspaces (scoped by agent, 默认托管位置) ---
+// 用户也可通过 addWorkspace 把任意外部路径登记为 workspace,
+// 那种情况下不走默认位置,LocalFsAdapter 内的 _index.json entry 自带 path。
 
-export const sessionDir = (agentId: string, sessionId: string) =>
-  join(sessionsDir(agentId), sessionId)
+export const workspacesDir = (agentId: string) => join(agentDir(agentId), 'workspaces')
+export const workspacesIndexFile = (agentId: string) => join(workspacesDir(agentId), '_index.json')
 
-/**
- * Session 内部管理文件集中目录(= `<sessionDir>/.silent`)。
- * `.silent/` 是 workspace 标记(见 `shared/consts.ts SILENT_DIR`),
- * 类似 `.git/` —— 任意文件夹里有它就是一个 Silent Agent 工作区。
- */
-export const sessionInternalDir = (agentId: string, sessionId: string) =>
-  join(sessionDir(agentId, sessionId), SILENT_DIR)
+/** 默认托管位置下,某 workspace 的根目录(同 `<workspacesDir>/<wid>/`)。 */
+export const managedWorkspaceDir = (agentId: string, workspaceId: string) =>
+  join(workspacesDir(agentId), workspaceId)
 
-export const sessionMetaFile = (agentId: string, sessionId: string) =>
-  join(sessionInternalDir(agentId, sessionId), FILES.META)
-export const sessionMessagesFile = (agentId: string, sessionId: string) =>
-  join(sessionInternalDir(agentId, sessionId), FILES.MESSAGES)
-export const sessionEventsFile = (agentId: string, sessionId: string) =>
-  join(sessionInternalDir(agentId, sessionId), FILES.EVENTS)
-export const sessionContextDir = (agentId: string, sessionId: string) =>
-  join(sessionInternalDir(agentId, sessionId), SUBDIRS.CONTEXT)
-export const sessionContextFile = (
-  agentId: string,
-  sessionId: string,
-  source: 'browser' | 'files' | 'shell',
-) => join(sessionContextDir(agentId, sessionId), `${source}.jsonl`)
-export const sessionStateDir = (agentId: string, sessionId: string) =>
-  join(sessionInternalDir(agentId, sessionId), SUBDIRS.STATE)
-export const sessionTabsFile = (agentId: string, sessionId: string) =>
-  join(sessionStateDir(agentId, sessionId), FILES.TABS_INDEX)
-
-/** 某 tab 的产物目录:browser snapshot / terminal buffer.log 放这 */
-export const sessionTabDir = (agentId: string, sessionId: string, tabId: string) =>
-  join(sessionInternalDir(agentId, sessionId), SUBDIRS.TABS, tabId)
-
-// ===== Workspace-level paths(取任意绝对路径作为 session 根)=====
-// 上面的 sessionXxx(agentId, sessionId) 针对"app 默认托管位置",
-// 这些 workspaceXxx(wsPath) 是通用版,可用于任何外部文件夹。
-// LocalFsAdapter 内部会先把 sessionId 解析成 wsPath,再调这些。
+// ===== Workspace-level paths(取任意绝对路径作为 workspace 根)=====
+// LocalFsAdapter 内部把 workspaceId 解析成 wsPath 后,所有 .silent/ 内的产物
+// 都走这组 wsPath-based helpers,跟"默认托管 vs 外挂"无关。
 
 export const workspaceInternalDir = (wsPath: string) => join(wsPath, SILENT_DIR)
 export const workspaceMetaFile = (wsPath: string) =>

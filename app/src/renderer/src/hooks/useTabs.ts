@@ -16,90 +16,90 @@ export interface UseTabsResult {
 }
 
 /**
- * 订阅当前 session 下所有 tab 的运行时状态。
- * 每个 session 有一个 silent-chat 类型 tab(创建 session 时自动 seed),是默认激活目标。
- * 切 session 时调 tab.switchSession,让 main 端隐掉旧 session 的 native view、恢复新 session 的。
+ * 订阅当前 workspace 下所有 tab 的运行时状态。
+ * 每个 workspace 有一个 silent-chat 类型 tab(创建 workspace 时自动 seed),是默认激活目标。
+ * 切 workspace 时调 tab.switchWorkspace,让 main 端隐掉旧 workspace 的 native view、恢复新 workspace 的。
  */
-export function useTabs(sessionId: string | null): UseTabsResult {
+export function useTabs(workspaceId: string | null): UseTabsResult {
   const [tabs, setTabs] = useState<TabMeta[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
-    if (!sessionId) {
+    if (!workspaceId) {
       setTabs([])
       return
     }
-    const list = await ipc.tab.list(sessionId)
+    const list = await ipc.tab.list(workspaceId)
     setTabs(list)
-  }, [sessionId])
+  }, [workspaceId])
 
-  // session 切换:告诉 main 做运行时切换,把默认 active 设成 silent-chat tab
+  // workspace 切换:告诉 main 做运行时切换,把默认 active 设成 silent-chat tab
   useEffect(() => {
     let mounted = true
-    if (!sessionId) {
+    if (!workspaceId) {
       setTabs([])
       setActiveTabId(null)
       return
     }
     ipc.tab
-      .switchSession(sessionId)
+      .switchWorkspace(workspaceId)
       .then((list) => {
         if (!mounted) return
         setTabs(list)
         const silent = list.find((t) => t.type === 'silent-chat')
         setActiveTabId(silent?.id ?? list[0]?.id ?? null)
       })
-      .catch((e) => console.error('[useTabs] switchSession', e))
+      .catch((e) => console.error('[useTabs] switchWorkspace', e))
     return () => {
       mounted = false
     }
-  }, [sessionId])
+  }, [workspaceId])
 
   const openBrowser = useCallback(
     async (url: string) => {
-      if (!sessionId) throw new Error('no active session')
-      const tab = await ipc.tab.open(sessionId, { type: 'browser', url })
+      if (!workspaceId) throw new Error('no active workspace')
+      const tab = await ipc.tab.open(workspaceId, { type: 'browser', url })
       await reload()
       setActiveTabId(tab.id)
       return tab
     },
-    [sessionId, reload],
+    [workspaceId, reload],
   )
 
   const openTerminal = useCallback(
     async (cwd?: string) => {
-      if (!sessionId) throw new Error('no active session')
-      const tab = await ipc.tab.open(sessionId, { type: 'terminal', cwd })
+      if (!workspaceId) throw new Error('no active workspace')
+      const tab = await ipc.tab.open(workspaceId, { type: 'terminal', cwd })
       await reload()
       setActiveTabId(tab.id)
       return tab
     },
-    [sessionId, reload],
+    [workspaceId, reload],
   )
 
   const openFile = useCallback(
     async (path: string) => {
-      if (!sessionId) throw new Error('no active session')
-      const tab = await ipc.tab.open(sessionId, { type: 'file', path })
+      if (!workspaceId) throw new Error('no active workspace')
+      const tab = await ipc.tab.open(workspaceId, { type: 'file', path })
       await reload()
       setActiveTabId(tab.id)
       return tab
     },
-    [sessionId, reload],
+    [workspaceId, reload],
   )
 
   const close = useCallback(
     async (tabId: string) => {
       await ipc.tab.close(tabId)
       // 关掉后,回落到 silent-chat
-      const list = await ipc.tab.list(sessionId!)
+      const list = await ipc.tab.list(workspaceId!)
       setTabs(list)
       if (activeTabId === tabId) {
         const silent = list.find((t) => t.type === 'silent-chat')
         setActiveTabId(silent?.id ?? list[0]?.id ?? null)
       }
     },
-    [sessionId, activeTabId],
+    [workspaceId, activeTabId],
   )
 
   const navigate = useCallback(async (tabId: string, url: string) => {

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { ipc } from '../lib/ipc'
 
 interface FileTreePanelProps {
-  /** 绝对路径,作为文件树根。通常是 activeSession.path */
+  /** 绝对路径,作为文件树根。通常是 activeWorkspace.path */
   rootPath: string
   /** 当前激活的文件 tab(用于高亮) */
   activeFilePath?: string | null

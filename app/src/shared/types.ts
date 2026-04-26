@@ -13,22 +13,18 @@ export interface AgentMeta {
   lastActiveAt: string      // ISO
 }
 
-// ============ Session ============
+// ============ Workspace ============
+//
+// app 层一等公民。**任意目录 + `.silent/`** 即一个 workspace,类比 .git/。
+// 默认建在 `~/.silent-agent/agents/<aid>/workspaces/<wid>/`,
+// 也可通过 addWorkspace 把任意已有目录注册为 workspace(写 `.silent/` 进去)。
 
-/**
- * @deprecated v0.2 删除。所有 session 都是"工作区",不再分 chat/workspace。
- * 保留字段只是为了旧数据兼容,不再用于代码分支逻辑。
- */
-export type SessionType = 'chat' | 'workspace'
-
-export interface SessionMeta {
+export interface WorkspaceMeta {
   id: string                // '260423-a1b2-logid'
-  /** @deprecated v0.2 删 */
-  type: SessionType
   name: string
   /**
-   * Session 的物理路径(绝对)。未设置时走默认 `~/.silent-agent/agents/<aid>/sessions/<id>/`。
-   * 设置时指向任意外部文件夹 —— 那个文件夹里的 .silent/ 就是本 session 的数据。
+   * Workspace 物理路径(绝对)。未设置时走默认 `~/.silent-agent/agents/<aid>/workspaces/<id>/`。
+   * 设置时指向任意外部文件夹 —— 那个文件夹里的 .silent/ 就是本 workspace 的数据。
    */
   path?: string
   /** 可选外部文件夹,作为 cwd / 观察锚(当 path 就是 linkedFolder 自身时不用额外填) */
@@ -37,9 +33,7 @@ export interface SessionMeta {
   lastActiveAt: string
 }
 
-export interface CreateSessionArgs {
-  /** @deprecated 保留参数兼容,默认 'chat' */
-  type?: SessionType
+export interface CreateWorkspaceArgs {
   name?: string             // 不传则自动起名
   linkedFolder?: string
 }
@@ -55,11 +49,11 @@ export interface ChatMessage {
   createdAt: string
 }
 
-// ============ Session Event (统一事件流) ============
+// ============ Workspace Event (统一事件流) ============
 
-// 所有事件汇入 sessions/<sid>/events.jsonl,单一时间线
+// 所有事件汇入 `<workspace>/.silent/events.jsonl`,单一时间线
 export type EventSource =
-  | 'session'   // session 生命周期(open/close)
+  | 'workspace' // workspace 生命周期(open/close)
   | 'tab'       // tab 生命周期(open/close/focus)
   | 'browser'   // 浏览器内动作(navigate/request/submit/click)
   | 'shell'     // 终端内动作(exec/exit)
@@ -68,18 +62,14 @@ export type EventSource =
   | 'agent'     // agent 工具调用 / 内部动作
   | 'linked'    // linkedFolder probe 结果
 
-export interface SessionEvent {
+export interface WorkspaceEvent {
   ts: string                              // ISO
   source: EventSource
   action: string                          // open | close | focus | navigate | exec | ...
-  tabId?: string                          // session / linked 级事件可无
+  tabId?: string                          // workspace / linked 级事件可无
   target?: string                         // URL / command / path
   meta?: Record<string, unknown>
 }
-
-// @deprecated 保留只为兼容代码(v0.2 前删除)
-export type ObservationSource = 'browser' | 'files' | 'shell'
-export type ObservationEvent = SessionEvent
 
 // ============ Tab ============
 
@@ -87,16 +77,16 @@ export type TabType = 'browser' | 'terminal' | 'file' | 'silent-chat'
 
 export interface TabMeta {
   id: string
-  sessionId: string
+  workspaceId: string
   type: TabType
   title: string
   pinned?: boolean          // silent-chat 是 true
   /**
    * Tab 的"数据位置"。一等字段,按 type 约定:
-   * - `silent-chat`: 相对 session 目录 → 'messages.jsonl'
-   * - `browser`: 相对 session 目录 → 'tabs/<tid>'(产物子目录,将来装 snapshots/)
-   * - `terminal`: 相对 session 目录 → 'tabs/<tid>'(装 buffer.log + snapshots/)
-   * - `file`: 绝对路径 或 相对 session 目录(用户 open 的文件)
+   * - `silent-chat`: 相对 workspace 根 → '.silent/messages.jsonl'
+   * - `browser`: 相对 workspace 根 → '.silent/tabs/<tid>'(产物子目录,将来装 snapshots/)
+   * - `terminal`: 相对 workspace 根 → '.silent/tabs/<tid>'(装 buffer.log + snapshots/)
+   * - `file`: 绝对路径 或 相对 workspace 根(用户 open 的文件)
    */
   path: string
   state: BrowserTabState | TerminalTabState | FileTabState | null

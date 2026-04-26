@@ -8,29 +8,29 @@ import FileTreePanel from './components/FileTreePanel'
 import SilentChat from './components/SilentChat'
 import PingPill from './components/PingPill'
 import { useAgent } from './hooks/useAgent'
-import { useSessions } from './hooks/useSessions'
+import { useWorkspaces } from './hooks/useWorkspaces'
 import { useTabs } from './hooks/useTabs'
 
 export default function App() {
   const { agent } = useAgent()
-  const { sessions, create } = useSessions()
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const { workspaces, create } = useWorkspaces()
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [fileTreeOpen, setFileTreeOpen] = useState(false)
 
   // 列表首次加载完 / 当前选中被删 时, 回落到第一条
   useEffect(() => {
-    if (sessions.length === 0) {
-      setActiveSessionId(null)
+    if (workspaces.length === 0) {
+      setActiveWorkspaceId(null)
       return
     }
-    if (!activeSessionId || !sessions.find((s) => s.id === activeSessionId)) {
-      setActiveSessionId(sessions[0]!.id)
+    if (!activeWorkspaceId || !workspaces.find((w) => w.id === activeWorkspaceId)) {
+      setActiveWorkspaceId(workspaces[0]!.id)
     }
-  }, [sessions, activeSessionId])
+  }, [workspaces, activeWorkspaceId])
 
-  const activeSession = useMemo(
-    () => sessions.find((s) => s.id === activeSessionId) ?? null,
-    [sessions, activeSessionId],
+  const activeWorkspace = useMemo(
+    () => workspaces.find((w) => w.id === activeWorkspaceId) ?? null,
+    [workspaces, activeWorkspaceId],
   )
 
   const {
@@ -42,11 +42,11 @@ export default function App() {
     openTerminal,
     openFile,
     close: closeTab,
-  } = useTabs(activeSessionId)
+  } = useTabs(activeWorkspaceId)
 
-  async function handleCreateSession(name: string | undefined) {
-    const s = await create({ type: 'chat', name })
-    setActiveSessionId(s.id)
+  async function handleCreateWorkspace(name: string | undefined) {
+    const w = await create({ name })
+    setActiveWorkspaceId(w.id)
   }
 
   // 当前 file tab 的绝对路径(用于文件树高亮)
@@ -57,9 +57,9 @@ export default function App() {
     <div className="app">
       <div className="titlebar">
         <span className="title">{agent?.name ?? 'Silent Agent'}</span>
-        {activeSession && (
+        {activeWorkspace && (
           <span className="title-meta">
-            › {activeSession.name}
+            › {activeWorkspace.name}
             {activeTab && activeTab.type !== 'silent-chat' && (
               <> › {activeTab.title}</>
             )}
@@ -70,17 +70,17 @@ export default function App() {
       <div className="main">
         <LeftNav
           agent={agent}
-          sessions={sessions}
-          activeSessionId={activeSessionId}
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
           narrow={fileTreeOpen}
-          onSelectSession={setActiveSessionId}
-          onCreateSession={handleCreateSession}
+          onSelectWorkspace={setActiveWorkspaceId}
+          onCreateWorkspace={handleCreateWorkspace}
           onToggleFileTree={() => setFileTreeOpen((x) => !x)}
         />
 
-        {fileTreeOpen && activeSession?.path && (
+        {fileTreeOpen && activeWorkspace?.path && (
           <FileTreePanel
-            rootPath={activeSession.path}
+            rootPath={activeWorkspace.path}
             activeFilePath={activeFilePath}
             onOpenFile={async (abs) => {
               await openFile(abs)
@@ -107,15 +107,15 @@ export default function App() {
               if (path) await openFile(path)
             }}
             onNewFile={async (filename) => {
-              if (!activeSessionId) return
-              const abs = await window.api.file.createInSession(activeSessionId, filename)
+              if (!activeWorkspaceId) return
+              const abs = await window.api.file.createInWorkspace(activeWorkspaceId, filename)
               await openFile(abs)
             }}
           />
           <div className="pane-container">
             <ActiveTabPane
               activeTab={activeTab}
-              activeSessionId={activeSessionId}
+              activeWorkspaceId={activeWorkspaceId}
             />
           </div>
         </main>
@@ -133,16 +133,16 @@ export default function App() {
  */
 function ActiveTabPane({
   activeTab,
-  activeSessionId,
+  activeWorkspaceId,
 }: {
   activeTab: ReturnType<typeof useTabs>['activeTab']
-  activeSessionId: string | null
+  activeWorkspaceId: string | null
 }) {
-  const sessionId = activeSessionId ?? 'no-session'
+  const workspaceId = activeWorkspaceId ?? 'no-workspace'
 
   // A 模式: Silent Chat 独占
   if (!activeTab || activeTab.type === 'silent-chat') {
-    return <SilentChat sessionId={sessionId} />
+    return <SilentChat workspaceId={workspaceId} />
   }
 
   // B 模式: 左工作 tab + 右 Silent Chat 分栏
@@ -153,7 +153,7 @@ function ActiveTabPane({
       </div>
       <div className="split-divider" />
       <div className="split-right">
-        <SilentChat sessionId={sessionId} />
+        <SilentChat workspaceId={workspaceId} />
       </div>
     </div>
   )

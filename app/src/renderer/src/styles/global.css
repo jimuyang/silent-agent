@@ -192,10 +192,10 @@ code, .mono {
 .standalone-nav .nav-item { color: var(--magic); font-weight: 500; }
 .standalone-nav .nav-item .ni-icon { color: var(--magic); }
 
-.session-create-row {
+.workspace-create-row {
   padding: 4px 0 6px;
 }
-.session-create-input {
+.workspace-create-input {
   width: 100%;
   padding: 6px 8px;
   font: inherit;
@@ -206,19 +206,19 @@ code, .mono {
   border-radius: 6px;
   outline: none;
 }
-.session-create-input::placeholder {
+.workspace-create-input::placeholder {
   color: var(--text-dim2);
 }
 
-.session-item {
+.workspace-item {
   padding: 6px 8px;
   border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
 }
-.session-item:hover { background: var(--hover); }
-.session-item.active { background: var(--accent-soft); }
-.session-item.active .si-name { color: var(--accent); }
+.workspace-item:hover { background: var(--hover); }
+.workspace-item.active { background: var(--accent-soft); }
+.workspace-item.active .si-name { color: var(--accent); }
 
 .si-row {
   display: flex;
@@ -254,20 +254,20 @@ code, .mono {
   animation: pulse 2s infinite;
 }
 
-/* ============ Session item 2-line card ============ */
-.session-item .si-line1 {
+/* ============ Workspace item 2-line card ============ */
+.workspace-item .si-line1 {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
-.session-item .si-name {
+.workspace-item .si-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-item .si-line2 {
+.workspace-item .si-line2 {
   font-size: 10px;
   color: var(--text-dim2);
   margin-top: 2px;
@@ -306,7 +306,7 @@ code, .mono {
 .left.narrow .nav-item { gap: 5px; padding-left: 6px; padding-right: 4px; }
 .left.narrow .agent-id { gap: 6px; padding-left: 2px; padding-right: 2px; }
 .left.narrow .section-head { padding-left: 4px; padding-right: 4px; }
-.left.narrow .session-item { padding-left: 6px; padding-right: 6px; }
+.left.narrow .workspace-item { padding-left: 6px; padding-right: 6px; }
 .left.narrow .ni-text,
 .left.narrow .agent-name,
 .left.narrow .agent-tag {

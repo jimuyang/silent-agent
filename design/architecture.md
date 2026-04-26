@@ -10,7 +10,7 @@
 - **Agent harness**:接口形式抽象;Phase 6 起手 `ClaudeAgentSdkHarness`(走 Claude 订阅);后续可平替 Anthropic API / OpenAI / Ollama
 - **运行时三件套**:Harness(LLM loop)/ Session(身份+历史)/ Sandbox(执行边界),正交可换
 - **存储**:本地 JSONL + YAML + Markdown,`~/.silent-agent/` 为默认根;**任意文件夹 + `.silent/` 即工作区**(类比 `.git/`)
-- **顶级公民**:Agent(非 singleton),**session 归属 agent**;默认 session 落在 `agents/<id>/sessions/<sid>/`,外挂 session 落在用户指定路径
+- **顶级公民**:Agent(非 singleton),**workspace 归属 agent**;默认 workspace 落在 `agents/<id>/workspaces/<wid>/`,外挂 workspace 落在用户指定路径
 - **外部资源**:Connection 全局唯一,按 `exclusive | shared` 分 mode;agent 通过 Attachment 关系挂载
 - **观察通道**:MVP P0 = 内嵌浏览器 CDP(Electron 原生)
 - **不上云**:本地自洽;未来可替换 harness 为 Claude Managed Agent,storage 加 sync adapter
@@ -30,8 +30,8 @@ flowchart TB
     end
 
     subgraph ORCH["② Orchestration Layer(Electron Main)"]
-        O1[Session 生命周期 · scoped by Agent]
-        O2[Tab 管理 per-session]
+        O1[Workspace 生命周期 · scoped by Agent]
+        O2[Tab 管理 per-workspace]
         O3[IPC · WebContentsView 编排]
         O4[Window ↔ Agent 绑定]
     end
@@ -66,7 +66,7 @@ flowchart TB
 | 层 | 职责 | 实现 | 未来上云替换点 |
 |---|---|---|---|
 | ① UI | 前端渲染、交互 | React + Vite(renderer) | 不变 |
-| ② Orchestration | Session/Tab/Window 生命周期、IPC | Electron main (TS) | 不变 |
+| ② Orchestration | Workspace/Tab/Window 生命周期、IPC | Electron main (TS) | 不变 |
 | ③ Agent Harness | tool use loop、context、permission | 自研 minimal loop (TS) | **替换为 Managed Agent runtime** |
 | ④ Capability | tools、skill runner、connections | Node 包 | web tools 可路由到云端执行 |
 | ⑤ Storage | 事件/skill/memory 落盘 | LocalFsAdapter(JSONL+YAML+MD) | **加 sync adapter**,L1/L2 先同步 |
@@ -85,7 +85,7 @@ classDiagram
       + name / avatar / model
       + system_prompt
     }
-    class Session {
+    class Workspace {
       + id
       + name / createdAt
       + linkedFolder? (可选外部挂载)
@@ -110,17 +110,17 @@ classDiagram
     class Window {
       runtime only
       + agentId (绑定)
-      + activeSessionId
+      + activeWorkspaceId
     }
     class Message
-    class SessionEvent {
-      session-level timeline
+    class WorkspaceEvent {
+      workspace-level timeline
       events.jsonl append-only
     }
     class Tab {
       + id
       + type : browser | terminal | file | silent-chat
-      + path (产物路径, session 内或外部绝对路径)
+      + path (产物路径, workspace 内或外部绝对路径)
       + state (type-specific runtime)
     }
     class Skill
@@ -132,42 +132,42 @@ classDiagram
     Connection "1" *-- "1..*" Capability
     Capability "1" -- "0..*" Attachment : 按 mode 限数
     Attachment "*" -- "1" Agent
-    Agent "1" *-- "0..*" Session
+    Agent "1" *-- "0..*" Workspace
     Agent "1" *-- "0..*" Skill
     Agent "1" *-- "0..*" KnowledgeFile
     Agent "1" -- "1" Memory
-    Session "1" *-- "0..*" Message
-    Session "1" *-- "0..*" SessionEvent
-    Session "1" *-- "0..*" Tab
+    Workspace "1" *-- "0..*" Message
+    Workspace "1" *-- "0..*" WorkspaceEvent
+    Workspace "1" *-- "0..*" Tab
     Window ..> Agent : 绑定
-    Window ..> Session : 当前活跃
+    Window ..> Workspace : 当前活跃
 ```
 
 ### 关系规则
 
-- **Agent 是顶级公民**:删 agent = 它的 sessions / skills / knowledge / memory 全走
-- **Session = 一个工作区目录(任意路径 + `.silent/` 标记)**:不再区分 chat / workspace,所有 session 都是工作区。默认建在 `agents/<aid>/sessions/<sid>/`,也可由用户指定挂载任意外部文件夹(`addWorkspace`)。`.silent/` 类比 `.git/`,是工作区身份的唯一标识。
+- **Agent 是顶级公民**:删 agent = 它的 workspaces / skills / knowledge / memory 全走
+- **Workspace = 一个工作区目录(任意路径 + `.silent/` 标记)**:不再区分 chat / workspace 类型,所有都是工作区。默认建在 `agents/<aid>/workspaces/<wid>/`,也可由用户指定挂载任意外部文件夹(`addWorkspace`)。`.silent/` 类比 `.git/`,是工作区身份的唯一标识。
 - **Tab = `{type, path, state}` 指针**:只告诉 UI "用什么视图打开哪个路径";产物快照 / 版本链在 path 所指的位置自管
-- **Events 是 session 级**:单一 `events.jsonl`,跨 tab 动作(focus/open/close)本身就是 event
+- **Events 是 workspace 级**:单一 `events.jsonl`,跨 tab 动作(focus/open/close)本身就是 event
 - **Connection 是 app-level 资源**:一个飞书登录就一份 auth,共享给多个 agent
 - **Capability 按 mode 决定 Attachment 的数量上限**:
   - `exclusive`(如飞书 IM):整个 App 只能有 1 个 `Attachment`,那个 agent 独占
   - `shared`(如日历/文档/KB):可多个 agent 并联
 - **Window 绑定 Agent**:MVP 单 window,未来切 agent 可能走"新开 window"
-- **linkedFolder(可选)**:session 可挂一个外部文件夹作 cwd / 观察锚;**不**纳入 session repo,events.jsonl 记其 HEAD SHA
+- **linkedFolder(可选)**:workspace 可挂一个外部文件夹作 cwd / 观察锚;**不**纳入 workspace repo,events.jsonl 记其 HEAD SHA
 
-### 统一模型:Session 就是一个 Git Repo,Tab 是文件指针
+### 统一模型:Workspace 就是一个 Git Repo,Tab 是文件指针
 
-**Session = 一个 git 仓库(目录)**。目录里所有产物(chat、browser 快照、terminal buffer、用户放的文件)都是这个仓库的内容。
+**Workspace = 一个 git 仓库(目录)**。目录里所有产物(chat、browser 快照、terminal buffer、用户放的文件)都是这个仓库的内容。
 
 **Tab = 一个 `{type, path, state}` 指针**。`tabs.json` 是索引,告诉 UI "用哪种 pane 打开哪个路径"。
 
 关键约定:
-- **不再区分 `type: 'chat' | 'workspace'`** — 所有 session 都是工作区,区别只是"下面有哪些文件"
+- **不再分类型** — 所有 workspace 都是工作区,区别只是"下面有哪些文件"
 - **Tab 自己管产物快照 / 版本**,落在 `tabs/<tid>/` 子目录里
-- **Events 是 session 级**,单一 `events.jsonl` 记所有跨 tab 动作(tab focus/open/close 本身就是事件)
-- **Git 提供版本管理** —— 每 session 一个 repo,auto-commit + agent-curator 两层策略
-- **`linkedFolder` 是 session 可选的外部挂载** —— 不纳入 session repo,只在 events 里记其 HEAD SHA
+- **Events 是 workspace 级**,单一 `events.jsonl` 记所有跨 tab 动作(tab focus/open/close 本身就是事件)
+- **Git 提供版本管理** —— 每 workspace 一个 repo,auto-commit + agent-curator 两层策略
+- **`linkedFolder` 是 workspace 可选的外部挂载** —— 不纳入 workspace repo,只在 events 里记其 HEAD SHA
 
 ```
 事件(events.jsonl)          ← "发生了什么"
@@ -185,8 +185,8 @@ git commit                   ← "这个时刻的 snapshot"
 | `silent-chat` | `messages.jsonl` | 一个文件(append-only) | harness 对话 |
 | `browser` | `tabs/<tid>/` | `snapshots/NNN.md` + `latest` symlink | `did-finish-load` 后抽 readability |
 | `terminal` | `tabs/<tid>/` | `buffer.log`(append) + `snapshots/NNN.log`(命令边界) | `pty.onData` + preexec/exit |
-| `file` (内部) | `sessions/<sid>/<path>` | 文件本身 | 用户 save |
-| `file` (外部) | 绝对路径 | 文件本身(session 外) | 用户 save(外部 git 管) |
+| `file` (内部) | `workspaces/<wid>/<path>` | 文件本身 | 用户 save |
+| `file` (外部) | 绝对路径 | 文件本身(workspace 外) | 用户 save(外部 git 管) |
 
 ### 分栏(Split Layout)演进路线
 
@@ -199,7 +199,7 @@ MVP 主区有两种显示模式:
 | Level | 内容 | 新增存储 | 触发升级的信号 |
 |---|---|---|---|
 | **0(现在)** | hardcoded:activeTab.type 决定 A/B,比例写死 CSS 1.3:1 | 无 | — |
-| **1** | 持久化 divider ratio 到 `sessions/<sid>/state/layout.json`,divider 可拖动 | `layout.json: { splitRatio: number }` | dogfood 时反复调比例 |
+| **1** | 持久化 divider ratio 到 `workspaces/<wid>/state/layout.json`,divider 可拖动 | `layout.json: { splitRatio: number }` | dogfood 时反复调比例 |
 | **2** | 完整 layout 树(类似 VSCode editor groups):任意 tab 可拖入 split,横纵皆可,可嵌套 | `layout.json: { tree: LayoutNode }` | 出现 "两个 browser / terminal 并排" 等真实多-pane 需求 |
 
 **设计原则**:tab 是一等公民,layout 是 tab 的排列派生物。Level 1+ 引入后仍不能动摇"每个 tab 独立有 id / 独立 content"的单元性,layout 只管"放在哪"。
@@ -219,12 +219,12 @@ MVP 主区有两种显示模式:
 
 **Toggle 入口**(两处冗余,体感一致):
 1. TabBar 最左的 `📁` 按钮(active 态 magic-color glow)—— 工作流主入口
-2. LeftNav 里 session 项的 `ws` tag 点击 —— 脑子切换里的"快捷暗门"
+2. LeftNav 里 workspace 项的 `ws` tag 点击 —— 脑子切换里的"快捷暗门"
 
 **Narrow LeftNav**(打开文件树时):
 - LeftNav 从 180px → **100px**(只**横向**压缩,**不动**纵向高度;高度变了会让滚动位置跳)
-- Session 卡片从单行变 **2 行**:line1 = 名字 + ws tag + live dot;line2 = 路径(若 linkedFolder)或相对时间("3 分钟前")
-- 这条规则的 **why**:用户讲过"leftNav 是脑子切换 / 文件夹和文件操作是要专注和心流的地方";窄到 100px 仍能看清 session 名,但视觉重量收缩,把焦点推给文件树
+- Workspace 卡片从单行变 **2 行**:line1 = 名字 + ws tag + live dot;line2 = 路径(若 linkedFolder)或相对时间("3 分钟前")
+- 这条规则的 **why**:用户讲过"leftNav 是脑子切换 / 文件夹和文件操作是要专注和心流的地方";窄到 100px 仍能看清 workspace 名,但视觉重量收缩,把焦点推给文件树
 
 **File Tree Panel 自身**:
 - 190px 宽,**舒适行高**(不靠竖向压紧塞内容)
@@ -233,17 +233,17 @@ MVP 主区有两种显示模式:
 - 懒加载:展开时再读子目录;不预扫描全树
 - 没有 `×` 关闭按钮 —— 它是 **pinned tab**,只通过 toggle 收起;离 📁 按钮很近,不需要冗余
 
-### 版本管理(Git per session)
+### 版本管理(Git per workspace)
 
-每个 session 目录自动 `git init`,作为一个独立 repo。两层 commit 策略:
+每个 workspace 目录自动 `git init`,作为一个独立 repo。两层 commit 策略:
 
 **Layer 1 — 基础规则(auto-commit)**:保证最低版本链,不依赖 agent。触发点:
 - Chat turn 完成
 - 浏览器 `did-finish-load` 且有 snapshot 新增
 - 终端命令 `exit`
-- 文件 save(file tab / session 内文件)
+- 文件 save(file tab / workspace 内文件)
 - Tab close
-- Session idle 30s 且 dirty(兜底 flush)
+- Workspace idle 30s 且 dirty(兜底 flush)
 
 **Layer 2 — Agent Curator(Phase 6+,当 agent 能用 git tool)**:
 - agent 拿 `git.status / git.diff / git.log` 看变化
@@ -262,27 +262,27 @@ tab-id: browser-abc
 ```
 
 **linkedFolder(嵌套 repo)处理** — **D 方案:只记 ref,不复制内容**:
-- session `.gitignore` 包含 linkedFolder 路径
+- workspace `.gitignore` 包含 linkedFolder 路径
 - events.jsonl 记 `{source: 'linked', action: 'probe', meta: {head: <sha>, dirty: bool}}`
 - linkedFolder 内容演进 agent 用 linkedFolder 自己的 git 看
 - 如果 linkedFolder 不是 git repo,退化为"每文件 sha256 的 pointer snapshot"
 
 **实现栈**:
 - `simple-git` npm 包(薄 wrapper over git CLI),macOS 系统自带 git binary
-- `src/main/storage/git.ts` — `SessionGit` 类封装 init/commit/status/diff
-- Phase "Session 化" 先做 Layer 1,Phase 6(Chat)开放给 agent 用
+- `src/main/storage/git.ts` — `WorkspaceGit` 类封装 init/commit/status/diff
+- Phase "Workspace 化" 先做 Layer 1,Phase 6(Chat)开放给 agent 用
 
-### Events 设计:Session 级单一时间线
+### Events 设计:Workspace 级单一时间线
 
-所有事件汇入 `sessions/<sid>/events.jsonl`,按 ts 时序追加。跨 tab 动作(tab focus / open / close)天然归属 session,不塞进某个 tab。
+所有事件汇入 `workspaces/<wid>/.silent/events.jsonl`,按 ts 时序追加。跨 tab 动作(tab focus / open / close)天然归属 workspace,不塞进某个 tab。
 
 **Event schema**:
 ```typescript
-interface SessionEvent {
+interface WorkspaceEvent {
   ts: string              // ISO
-  source: 'tab' | 'browser' | 'shell' | 'file' | 'chat' | 'agent' | 'session' | 'linked'
+  source: 'tab' | 'browser' | 'shell' | 'file' | 'chat' | 'agent' | 'workspace' | 'linked'
   action: string          // 按 source 定义: focus/open/close/navigate/request/exec/edit/turn/...
-  tabId?: string          // 可选,meta 事件(session / linked)可无
+  tabId?: string          // 可选,meta 事件(workspace / linked)可无
   target?: string         // URL / command / path
   meta?: Record<string, unknown>
 }
@@ -310,9 +310,46 @@ interface SessionEvent {
 
 | 对象 | 职责 | 换的时机 | 持久度 |
 |---|---|---|---|
-| **Session** | 身份 / 历史 / workspace 路径 | 切会话 | 永久(磁盘) |
-| **Sandbox** | Tool 执行边界:cwd / 可读写路径 / env / 网络 / 超时 | 切"执行模式"(真执行 / dry-run / 容器 / 远程 VM) | 绑 session 但可换 impl |
+| **Session** | 身份 / 对话历史 / system prompt / knowledge | 切会话 / 切持久层 | 永久 |
+| **Sandbox** | Tool 执行边界:cwd / 可读写路径 / env / 网络 / 超时 | 切"执行模式"(真执行 / dry-run / 容器 / 远程 VM) | 与 Session 独立 |
 | **Harness** | LLM loop 运行时:哪家模型 / streaming / compaction / 权限 gate | 切 provider 或 loop 策略 | 每次 start 一次,可 recreate |
+
+#### 接口在 agent-core,实体在 app —— 现在融合 / 未来分离
+
+**agent-core 只定义三个接口**(`Harness` / `Session` / `Sandbox`),不知道"workspace"这个词。
+
+**app 的 `Workspace`** 是个"双面体":同一个工作区目录(`.silent/messages.jsonl` + workspace 根作 cwd)既给 harness 当 `Session`(读写对话),也给 harness 当 `Sandbox`(读写文件 / 跑命令)。MVP 通过两个 adapter 把同一个 Workspace 暴露成两个接口:
+
+```typescript
+// app 端伪代码
+const ws = await loadWorkspace(workspaceId)
+const session  = new WorkspaceSessionAdapter(ws)   // 实现 agent-core Session 接口
+const sandbox  = new WorkspaceSandboxAdapter(ws)   // 实现 agent-core Sandbox 接口
+const harness  = createAgentRuntime({ session, sandbox, ... })
+```
+
+**为什么不直接让 Workspace implements Session, Sandbox?** —— adapter 的好处是 Workspace 不被 agent-core 的接口反向耦合;agent-core 真换接口签名 app 只改 adapter,不改业务。
+
+**未来上云,Session 和 Sandbox 自然分离**:
+- Session 持久化迁到云端 DB(跨设备同步对话)
+- Sandbox 切到远程容器 / VM(强隔离 / 多租户 / GPU)
+- 同一个 Session 可以跑在不同 Sandbox 上(本地 dry-run → 云端真执行)
+- 同一个 Sandbox 也可以服务不同 Session(共享开发环境)
+- **agent-core 接口不需要改** —— 这就是三件套从 day 1 就分开抽象的回报
+
+```
+MVP(本地)                     云端(v1+)
+┌──────────────┐              ┌─────────────────┐
+│  Workspace   │              │  CloudSession   │ (DB-backed)
+│  ┌────────┐  │              │  + cache_control│
+│  │Session │  │              └────────┬────────┘
+│  └────────┘  │                       │
+│  ┌────────┐  │              ┌────────▼────────┐
+│  │Sandbox │  │              │ RemoteSandbox   │ (Docker / VM)
+│  └────────┘  │              │  + audit log    │
+└──────────────┘              └─────────────────┘
+   1 个实体两面             N:M 任意装配
+```
 
 #### Harness 在 LLM Chat 之上做的 8 件事
 
@@ -325,14 +362,14 @@ LLM Chat 是无状态函数(`messages → stream`),Harness 是长期活着的 ag
 5. **取消** — 中断 stream + 清理 pending tool call
 6. **事件广播** — emit user-turn / tool-call / agent-turn / 错误 到 events.jsonl
 7. **Context 注入** — 动态拼 system(+ 观察事件 + memory + tab 状态)
-8. **Session 绑定** — tool 执行绑定到对应 session 的 Sandbox
+8. **Workspace 绑定** — tool 执行绑定到对应 workspace 的 Sandbox
 
 #### 接口形态
 
 ```typescript
 // ===== Sandbox =====
 interface Sandbox {
-  readonly sessionId: string
+  readonly workspaceId: string
   readonly workspacePath: string     // 关联的 workspace 根(引用,不拥有)
   readonly cwd: string
   readonly env: Record<string, string>
@@ -352,7 +389,7 @@ class ReadOnlySandbox implements Sandbox { /* dry-run */ }
 class DockerSandbox implements Sandbox { /* 容器,v1+ */ }
 
 // ===== Harness =====
-interface AgentHarness {
+interface Harness {
   readonly providerName: string      // 'claude-agent-sdk' / 'anthropic-api' / 'openai' / ...
   readonly modelName: string
   sendMessage(text: string): HarnessStream
@@ -360,17 +397,17 @@ interface AgentHarness {
   listMessages(): ChatMessage[]
 }
 
-class ClaudeAgentSdkHarness implements AgentHarness { /* 走 Claude 订阅 */ }
-class AnthropicApiHarness implements AgentHarness { /* 走 API key pay-per-token */ }
-class OpenAiHarness implements AgentHarness { /* OpenAI */ }
+class ClaudeAgentSdkHarness implements Harness { /* 走 Claude 订阅 */ }
+class AnthropicApiHarness implements Harness { /* 走 API key pay-per-token */ }
+class OpenAiHarness implements Harness { /* OpenAI */ }
 
 // ===== Factory(粘合三件套) =====
 function createAgentRuntime(deps: {
-  session: SessionMeta
-  sandbox: Sandbox
+  session: Session                                    // agent-core 接口,app 用 WorkspaceSessionAdapter 实现
+  sandbox: Sandbox                                    // agent-core 接口,app 用 WorkspaceSandboxAdapter 实现
   harnessConfig: { provider: string; model: string; systemPrompt: string; tools: ToolDefinition[] }
   onEvent?: (e: HarnessEvent) => void
-}): AgentHarness
+}): Harness
 ```
 
 #### 为什么 Workspace ≠ Sandbox
@@ -420,7 +457,7 @@ async sendMessage(text: string) {
     tools: this.tools,           // 工具数组结尾打一个 cache_control
     cwd: this.sandbox.cwd,
     canUseTool: ...,
-    // 不传 resume —— session 由 messages.jsonl 自管
+    // 不传 resume —— 历史由 messages.jsonl 自管
   })
 }
 ```
@@ -434,9 +471,9 @@ async sendMessage(text: string) {
 ```
 src/main/agent/
 ├── runtime/                    三件套 façade
-│   ├── session.ts              已有
+│   ├── workspace.ts            app 端 Workspace 数据模型(已有,原 session.ts)
 │   ├── sandbox.ts              Sandbox 接口 + LocalFsSandbox
-│   ├── harness.ts              AgentHarness 接口 + 事件
+│   ├── harness.ts              Harness 接口 + 事件
 │   └── factory.ts              createAgentRuntime
 ├── harness/                    各 provider 实现
 │   ├── claude-agent-sdk.ts     Phase 6 起手
@@ -466,7 +503,7 @@ interface Tool {
 
 interface ExecContext {
   agentId: string
-  sessionId: string
+  workspaceId: string
   sandbox: Sandbox       // tool 通过它读写文件 / exec,sandbox 决定允不允许
   windowId?: number
 }
@@ -474,13 +511,13 @@ interface ExecContext {
 
 ## 存储约定(everything is file)
 
-> **核心约定**:工作区身份由 **`.silent/`** 目录决定(类比 `.git/`)。任何文件夹 `<X>` 加上 `<X>/.silent/` 就是一个 Silent Agent 工作区。Agent 默认在 `~/.silent-agent/agents/<aid>/sessions/<sid>/` 下建,也可通过 `addWorkspace(absPath)` 把任意已有目录注册为 session,只要在该目录写 `.silent/` 并把绝对路径登记进 agent 的 `_index.json`。
+> **核心约定**:工作区身份由 **`.silent/`** 目录决定(类比 `.git/`)。任何文件夹 `<X>` 加上 `<X>/.silent/` 就是一个 Silent Agent 工作区。Agent 默认在 `~/.silent-agent/agents/<aid>/workspaces/<wid>/` 下建,也可通过 `addWorkspace(absPath)` 把任意已有目录注册为 workspace,只要在该目录写 `.silent/` 并把绝对路径登记进 agent 的 `_index.json`。
 
 **身份目录命名集中在 `app/src/shared/consts.ts`**(`SILENT_DIR / FILES.* / SUBDIRS.* / SILENT_CHAT_TAB_PATH / tabRelPath()`),不要把 `'.silent'` / `'messages.jsonl'` 这类字符串散落到各处。
 
 ```
 ~/.silent-agent/
-├── app-state.json                      # 窗口位置、上次活跃 agent+session
+├── app-state.json                      # 窗口位置、上次活跃 agent+workspace
 ├── app-config.yaml                     # API key、主题、全局偏好
 │
 ├── connections/                        # app-level 外部资源
@@ -498,15 +535,15 @@ interface ExecContext {
 │       │   └── L2-profile.md
 │       ├── skills/<skill-name>.yaml
 │       ├── knowledge/<topic>.md
-│       └── sessions/
+│       └── workspaces/
 │           ├── _index.json             # [{id, path?}] —— path 在场表示外挂工作区
-│           └── <session-id>/           # ★ 一个工作区目录(同时也是 git repo)
+│           └── <workspace-id>/         # ★ 一个工作区目录(同时也是 git repo)
 │               ├── .git/               # auto-init(Phase 5f)
 │               ├── .gitignore
 │               ├── .silent/            # ★ 工作区标识 + 内部产物全在这下面
 │               │   ├── meta.yaml       # name / linkedFolder?
 │               │   ├── messages.jsonl  # silent-chat tab 的产物
-│               │   ├── events.jsonl    # session 级单一时间线
+│               │   ├── events.jsonl    # workspace 级单一时间线
 │               │   ├── tabs.json       # tab index: [{id, type, path, state}]
 │               │   ├── tabs/<tid>/     # 每个 tab 的产物
 │               │   │   ├── snapshots/NNN-<ts>.{md|log}
@@ -528,16 +565,16 @@ interface ExecContext {
     └── ...                             # 同上
 ```
 - `addWorkspace(agentId, absPath, name?)` 在 `absPath/.silent/` 下创建标识 + 初始化产物
-- 在 agent 的 `sessions/_index.json` 追加 `{id, path: absPath}` 记录
-- 之后 Storage 层用 `resolveSessionPath(agentId, sessionId)` 把 sessionId → 绝对路径(默认位置或外挂位置)
+- 在 agent 的 `workspaces/_index.json` 追加 `{id, path: absPath}` 记录
+- 之后 Storage 层用 `resolveWorkspacePath(agentId, workspaceId)` 把 workspaceId → 绝对路径(默认位置或外挂位置)
 - **不复制用户文件,不接管用户的 `.git/`**;用户的代码仓库还是用户自己的
 
 **linkedFolder(D 方案,只记 ref)**:
-- 与 addWorkspace 不同 —— `linkedFolder` 是 session 内部 meta 字段,标记一个**观察锚**(只读引用),不在那里写 `.silent/`
+- 与 addWorkspace 不同 —— `linkedFolder` 是 workspace 内部 meta 字段,标记一个**观察锚**(只读引用),不在那里写 `.silent/`
 - `.gitignore` 不复制其内容,events.jsonl 定期 probe 记 HEAD SHA + dirty 状态
 
 - **JSONL 是真相源**,SQLite/index 只做缓存,删了能从 JSONL 重建
-- **一 session 一 git repo**:删 = `rm -rf`,分享 = `git bundle` 或 tar 整目录
+- **一 workspace 一 git repo**:删 = `rm -rf`,分享 = `git bundle` 或 tar 整目录
 - **原子写**:yaml/json 整文件写 `.tmp` + rename(POSIX 原子);jsonl 追加 + fsync
 - **List 优化**:`_index.json` 作为目录扫描 cache,启动时读,不命中再重建
 - **events.jsonl 高频 append**,git 不 commit 每一次;commit 在逻辑边界(Layer 1 规则 / Layer 2 agent 决策)
@@ -550,20 +587,20 @@ interface StorageAdapter {
   listAgents(): Promise<AgentMeta[]>
   getAgent(id: string): Promise<Agent>
 
-  // sessions (scoped by agent) —— sessionId → 绝对路径解析
-  listSessions(agentId: string): Promise<SessionMeta[]>
-  createSession(agentId: string, args: CreateSessionArgs): Promise<SessionMeta>
-  /** ★ 把任意已有目录注册为 session,在该目录写 .silent/ */
-  addWorkspace(agentId: string, absPath: string, name?: string): Promise<SessionMeta>
-  /** ★ sessionId → 绝对路径(默认位置 or 外挂),内部带 cache */
-  resolveSessionPath(agentId: string, sessionId: string): Promise<string>
+  // workspaces (scoped by agent) —— workspaceId → 绝对路径解析
+  listWorkspaces(agentId: string): Promise<WorkspaceMeta[]>
+  createWorkspace(agentId: string, args: CreateWorkspaceArgs): Promise<WorkspaceMeta>
+  /** ★ 把任意已有目录注册为 workspace,在该目录写 .silent/ */
+  addWorkspace(agentId: string, absPath: string, name?: string): Promise<WorkspaceMeta>
+  /** ★ workspaceId → 绝对路径(默认位置 or 外挂),内部带 cache */
+  resolveWorkspacePath(agentId: string, workspaceId: string): Promise<string>
 
-  appendMessage(agentId: string, sessionId: string, msg: ChatMessage): Promise<void>
-  appendEvent(agentId: string, sessionId: string, evt: SessionEvent): Promise<void>
+  appendMessage(agentId: string, workspaceId: string, msg: ChatMessage): Promise<void>
+  appendEvent(agentId: string, workspaceId: string, evt: WorkspaceEvent): Promise<void>
 
   // tabs
-  getTabs(agentId: string, sessionId: string): Promise<Tab[]>
-  setTabs(agentId: string, sessionId: string, tabs: Tab[]): Promise<void>
+  getTabs(agentId: string, workspaceId: string): Promise<Tab[]>
+  setTabs(agentId: string, workspaceId: string, tabs: Tab[]): Promise<void>
 
   // skills / memory / knowledge
   listSkills(agentId: string): Promise<Skill[]>
@@ -582,7 +619,7 @@ class LocalFsAdapter implements StorageAdapter { ... }
 // 未来 CloudSyncAdapter wraps LocalFsAdapter,双写+本地优先
 ```
 
-**`_index.json` 的演化**:从早期的 `{ids: [...]}` 升级为 `{entries: [{id, path?}]}`,其中 `path` 在场表示外挂工作区的绝对路径,缺省表示用 `agents/<aid>/sessions/<id>/` 默认位置。
+**`_index.json` 的演化**:从早期的 `{ids: [...]}` 升级为 `{entries: [{id, path?}]}`,其中 `path` 在场表示外挂工作区的绝对路径,缺省表示用 `agents/<aid>/workspaces/<id>/` 默认位置。
 
 ## 项目目录(代码组织)
 
@@ -595,7 +632,7 @@ silent-agent/
 │   │   │   ├── index.ts                # 窗口 + 启动
 │   │   │   ├── ipc/                    # 唯一 import 'electron' 的业务入口
 │   │   │   │   ├── agent.ts
-│   │   │   │   ├── session.ts
+│   │   │   │   ├── workspace.ts
 │   │   │   │   ├── tab.ts
 │   │   │   │   └── ...
 │   │   │   ├── storage/                # 纯 TS,不 import electron
@@ -606,7 +643,7 @@ silent-agent/
 │   │   │   │   └── yaml.ts             # 原子写
 │   │   │   ├── agent/                  # 纯 TS
 │   │   │   │   ├── registry.ts         # agent list/get
-│   │   │   │   ├── session.ts          # session CRUD
+│   │   │   │   ├── workspace.ts        # workspace CRUD
 │   │   │   │   ├── harness.ts          # tool use loop(Phase 2+)
 │   │   │   │   └── llm.ts              # Anthropic SDK 封装
 │   │   │   ├── tabs/                   # 桥接层,import electron
@@ -661,19 +698,19 @@ window.api = {
     // create/rename/delete: MVP 不开放 UI,手改 yaml
   }
 
-  // 所有 session 调用隐含"当前 window 的 agentId"
-  session: {
-    list: () => SessionMeta[]
-    create: (args: { name?: string }) => SessionMeta            // 默认位置
-    addWorkspace: (absPath: string, name?: string) => SessionMeta  // 外挂任意已有目录
+  // 所有 workspace 调用隐含"当前 window 的 agentId"
+  workspace: {
+    list: () => WorkspaceMeta[]
+    create: (args: { name?: string }) => WorkspaceMeta            // 默认位置
+    add: (absPath: string, name?: string) => WorkspaceMeta        // 外挂任意已有目录(addWorkspace)
     rename: (id: string, name: string) => void
     delete: (id: string) => void
     loadMessages: (id: string) => ChatMessage[]
   }
 
   tab: {
-    list: (sessionId: string) => TabMeta[]
-    open: (sessionId: string, args: TabOpenArgs) => TabMeta
+    list: (workspaceId: string) => TabMeta[]
+    open: (workspaceId: string, args: TabOpenArgs) => TabMeta
     close: (tabId: string) => void
     focus: (tabId: string) => void
     popupTypeMenu: () => 'browser'|'terminal'|'file'|'file-new'|null  // 原生 OS 菜单
@@ -683,7 +720,7 @@ window.api = {
     read: (absPath: string) => string
     write: (absPath: string, content: string) => void
     pickOpen: () => string | null
-    createInSession: (sessionId: string, filename: string) => string  // 安全检查 .silent / .git / 越界
+    createInWorkspace: (workspaceId: string, filename: string) => string  // 安全检查 .silent / .git / 越界
     listDir: (absPath: string) => DirEntry[]                          // 文件树用
   }
 
@@ -696,18 +733,18 @@ window.api = {
 }
 ```
 
-**IPC 内部用 `BrowserWindow.fromWebContents(event.sender)` 取 `agentId`**,业务层拿到的永远是 `(agentId, sessionId, ...)`,不关心 window 怎么绑。
+**IPC 内部用 `BrowserWindow.fromWebContents(event.sender)` 取 `agentId`**,业务层拿到的永远是 `(agentId, workspaceId, ...)`,不关心 window 怎么绑。
 
 ## MVP v0.1 范围对齐
 
 **核心原则**:**Tab 基础设施先做,AI 后置**。先把"轻 IDE 壳"的 3 种 tab(浏览器/终端/文件)跑通,dogfood 工作区形态 → 再加 agent harness + observation + skill。
 
 **做**(Phase 1-8,详见 `task.md`):
-- Phase 1 ✅ 存储层 + Agent/Session CRUD + 左栏对接
+- Phase 1 ✅ 存储层 + Agent/Workspace CRUD + 左栏对接
 - Phase 2 ✅ Tab 管理框架 + 浏览器 tab(WebContentsView)
 - Phase 3 ✅ 终端 tab(xterm + node-pty)
 - Phase 4 ✅ 文件 tab(Monaco editor)
-- Phase 5 🔄 Session 化 · 工作区化(`.silent/`)+ events.jsonl + Layer 1 git auto-commit
+- Phase 5 🔄 Workspace 化(`.silent/`)+ events.jsonl + Layer 1 git auto-commit
 - Phase 6 — Chat:Sandbox + Harness 接口 + `ClaudeAgentSdkHarness`(走 Claude 订阅,自管 messages.jsonl + cache_control)+ 知识库 tool
 - Phase 7 — 教教我仪式 + skill v1 教学执行
 - Phase 8 — Dogfood(1 周)
@@ -726,7 +763,7 @@ window.api = {
 | Electron 包大违反"轻"原则 | 只打 macOS dmg;砍 locale;v0.2 再考虑 Tauri partial port |
 | 多 agent 数据模型变复杂了 | MVP 只展示 default agent,代码按多 agent 写;UI 不做 |
 | Connection mode 冲突(飞书换 owner) | MVP 手改 yaml;v0.2 做设置面板 |
-| Observation events 累积,session 变慢 | 按 session 按通道分 jsonl;V2 加 SQLite index |
+| Observation events 累积,workspace 变慢 | 按 workspace 按通道分 jsonl;V2 加 SQLite index |
 | Node 主进程单线程卡 LLM 流 | harness async + renderer 直接渲染流 |
 | 教学模式 UI 节奏烦 | 第一版每 tool call 一次;dogfood 再调 |
 

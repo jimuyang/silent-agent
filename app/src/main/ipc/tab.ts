@@ -22,7 +22,7 @@ export function unregisterTabManager(windowId: number) {
   managers.delete(windowId)
 }
 
-function managerFor(event: Electron.IpcMainInvokeEvent): TabManager {
+function managerFor(_event: Electron.IpcMainInvokeEvent): TabManager {
   // 在多 window 时按 event.sender.getOwnerBrowserWindow().id 反查
   // MVP 单 window, 任意拿第一个就好
   if (managers.size === 0) throw new Error('no tab manager registered')
@@ -31,14 +31,14 @@ function managerFor(event: Electron.IpcMainInvokeEvent): TabManager {
 }
 
 export function registerTabIpc() {
-  ipcMain.handle(IPC.TAB_LIST, async (event, sessionId: string) => {
-    return managerFor(event).list(sessionId)
+  ipcMain.handle(IPC.TAB_LIST, async (event, workspaceId: string) => {
+    return managerFor(event).list(workspaceId)
   })
 
   ipcMain.handle(
     IPC.TAB_OPEN,
-    async (event, payload: { sessionId: string; args: OpenTabArgs }) => {
-      return managerFor(event).open(payload.sessionId, payload.args)
+    async (event, payload: { workspaceId: string; args: OpenTabArgs }) => {
+      return managerFor(event).open(payload.workspaceId, payload.args)
     },
   )
 
@@ -71,9 +71,9 @@ export function registerTabIpc() {
     },
   )
 
-  // 切 session 时 renderer 主动告诉 main(hide 旧 tabs + 恢复新 tabs 的 runtime)
-  ipcMain.handle(IPC.TAB_SWITCH_SESSION, async (event, sessionId: string) => {
-    return managerFor(event).switchSession(sessionId)
+  // 切 workspace 时 renderer 主动告诉 main(hide 旧 tabs + 恢复新 tabs 的 runtime)
+  ipcMain.handle(IPC.TAB_SWITCH_WORKSPACE, async (event, workspaceId: string) => {
+    return managerFor(event).switchWorkspace(workspaceId)
   })
 
   // ----- Terminal-specific -----
