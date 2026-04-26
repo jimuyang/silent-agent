@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Silent Agent · Prototype v0.2 · Pinned File Tree</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1013;
+    --panel: #1a1b1f;
+    --panel-2: #23242a;
+    --panel-3: #2b2c33;
+    --hover: #2d2f38;
+    --border: #2a2b31;
+    --border-soft: #23242a;
+    --text: #ececf1;
+    --text-dim: #8c8c94;
+    --text-dim2: #5a5b62;
+    --accent: #5b8cff;
+    --accent-soft: rgba(91, 140, 255, 0.14);
+    --ok: #30d158;
+    --warn: #ff9f0a;
+    --magic: #bf5af2;
+    --magic-soft: rgba(191, 90, 242, 0.12);
+  }
+  body {
+    font-family: -apple-system, 'SF Pro Text', 'PingFang SC', sans-serif;
+    background: #07080a;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.55;
+    padding: 40px 24px 60px;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  /* ===== Doc head ===== */
+  .doc-head { max-width: 1400px; margin: 0 auto 28px; }
+  .doc-title { font-size: 22px; font-weight: 600; }
+  .doc-sub { color: var(--text-dim); margin-top: 6px; font-size: 13px; }
+
+  /* ===== Frame ===== */
+  .frame { max-width: 1400px; margin: 0 auto 36px; }
+  .frame-label { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; padding-left: 4px; }
+  .frame-num {
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent-soft); color: var(--accent);
+    font-weight: 600; font-size: 13px;
+    border: 1px solid rgba(91, 140, 255, 0.25);
+  }
+  .frame-title { font-size: 15px; font-weight: 600; }
+  .frame-desc { color: var(--text-dim); font-size: 12px; }
+
+  /* ===== App shell ===== */
+  .app {
+    width: 100%; height: 680px;
+    background: var(--bg); border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .titlebar {
+    height: 36px; display: flex; align-items: center; padding: 0 12px;
+    background: linear-gradient(to bottom, #1b1c21, #16171b);
+    border-bottom: 1px solid var(--border);
+  }
+  .traffic { display: flex; gap: 6px; }
+  .traffic .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .traffic .red { background: #ff5f57; }
+  .traffic .yellow { background: #febc2e; }
+  .traffic .green { background: #28c840; }
+  .title-center { flex: 1; text-align: center; color: var(--text-dim); font-size: 12px; }
+
+  .main { flex: 1; display: flex; min-height: 0; }
+
+  /* ===== LeftNav (wide) ===== */
+  .left {
+    width: 256px; background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; flex-shrink: 0;
+    transition: width 0.2s ease;
+  }
+  .left-section { padding: 12px 12px; border-bottom: 1px solid var(--border-soft); }
+  .left-section:last-child { border-bottom: none; flex: 1; overflow-y: auto; }
+
+  .agent-id { display: flex; align-items: center; gap: 10px; padding: 6px 8px; margin-bottom: 10px; }
+  .agent-avatar {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(135deg, #5b8cff, #bf5af2);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 14px;
+  }
+  .agent-name { font-weight: 600; font-size: 13px; }
+  .agent-tag { font-size: 10px; color: var(--text-dim); }
+
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    color: var(--text-dim); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 0 6px 6px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+    border-radius: 6px; font-size: 12px; color: var(--text);
+    cursor: pointer;
+  }
+  .nav-item:hover { background: var(--hover); }
+  .ni-icon { width: 14px; text-align: center; color: var(--text-dim); flex-shrink: 0; }
+  .ni-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ni-meta { color: var(--text-dim2); font-size: 11px; }
+
+  /* Session list items */
+  .session-item {
+    padding: 5px 8px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  }
+  .session-item:hover { background: var(--hover); }
+  .session-item.active { background: var(--accent-soft); }
+  .session-item.active .si-name { color: var(--accent); }
+  .si-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .si-type { font-size: 11px; color: var(--text-dim); }
+  .si-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .si-tag {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 1px 6px; border-radius: 4px;
+    background: var(--panel-3); color: var(--text-dim); font-weight: 600;
+  }
+  /* "ws" tip — clickable, highlighted */
+  .si-tag.ws-clickable {
+    color: var(--magic); background: var(--magic-soft);
+    border: 1px solid rgba(191, 90, 242, 0.25);
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .si-tag.ws-clickable:hover {
+    background: rgba(191, 90, 242, 0.22);
+    transform: scale(1.05);
+  }
+  .si-tag.ws-clickable.opened {
+    background: var(--magic);
+    color: #fff;
+  }
+  .live-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--ok);
+  }
+
+  /* ===== LeftNav narrow mode =====
+     原则:不动垂直(高度/padding/font-size),只横向压缩。整列 ~100px。
+     顶部 section label / nav item 长文本自动 ellipsis;会话每条 2 行卡片(cmux 风)。
+  */
+  .left.narrow {
+    width: 100px;
+  }
+  /* section 横向 padding 最小化,垂直不动 */
+  .left.narrow .left-section { padding-left: 4px; padding-right: 4px; }
+  /* nav item 横向 gap 略紧, 内部 padding 也收 */
+  .left.narrow .nav-item { gap: 5px; padding-left: 6px; padding-right: 4px; }
+  .left.narrow .agent-id { gap: 6px; padding-left: 2px; padding-right: 2px; }
+  .left.narrow .section-head { padding-left: 4px; padding-right: 4px; }
+  .left.narrow .session-item { padding-left: 6px; padding-right: 6px; }
+  /* 所有超长文本自动 ellipsis */
+  .left.narrow .ni-text,
+  .left.narrow .agent-name,
+  .left.narrow .agent-tag {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .left.narrow .section-head {
+    /* section 标题行保留,但右侧的 [+] / 计数 hide */
+  }
+  .left.narrow .nav-item .ni-meta,
+  .left.narrow .nav-item .badge { display: none; }
+
+  /* 会话改成"每条 2 行卡片"(cmux 风):上名字 · 下状态/时间 */
+  .left.narrow .session-item {
+    padding: 6px 8px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .left.narrow .session-item .si-type,
+  .left.narrow .session-item .si-tag { display: none; }
+  .left.narrow .session-item .si-line1 {
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+  }
+  .left.narrow .session-item .si-name {
+    flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px;
+  }
+  .left.narrow .session-item.active .si-name {
+    color: var(--accent); font-weight: 500;
+  }
+  .left.narrow .session-item .si-line2 {
+    font-size: 10px; color: var(--text-dim2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .left.narrow .session-item .live-dot {
+    width: 5px; height: 5px; flex-shrink: 0;
+  }
+
+  .expand-btn {
+    padding: 4px 6px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim2); background: transparent;
+    font-size: 11px; gap: 4px;
+  }
+  .expand-btn:hover { background: var(--hover); color: var(--accent); }
+
+  /* ===== File Tree Panel ===== */
+  .file-tree-panel {
+    width: 190px; flex-shrink: 0;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  .ft-head {
+    padding: 10px 10px 6px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .ft-head-path {
+    font-family: 'SF Mono', ui-monospace, monospace;
+    font-size: 10px; color: var(--text-dim2); text-transform: none;
+    letter-spacing: normal;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 150px;
+  }
+  .ft-close { color: var(--text-dim); font-size: 14px; cursor: pointer; padding: 0 4px; }
+  .ft-close:hover { color: var(--text); }
+  .ft-body { flex: 1; overflow-y: auto; padding: 6px 4px 8px; }
+
+  .tree-node {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 6px; border-radius: 4px; cursor: pointer;
+    font-size: 12px; line-height: 1.55;     /* 高度保留舒适 */
+  }
+  .tree-node:hover { background: var(--hover); }
+  .tree-node.active { background: var(--accent-soft); color: var(--accent); }
+  /* icon 自身承担 "folder 开/闭 / file 类型" 的视觉信号,不再额外的 chevron 列 */
+  .tree-node .icon { width: 14px; text-align: center; font-size: 12.5px; }
+  .tree-node.folder .icon { color: var(--warn); }
+  .tree-node.file .icon { color: var(--text-dim); }
+  .tree-node.active .icon { color: var(--accent); }
+  .tree-node .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 子树沿左侧一条细引导线,看出层级(只横向缩进少一点) */
+  .tree-subtree { margin-left: 10px; border-left: 1px dashed var(--border); padding-left: 3px; }
+
+  /* ===== Center ===== */
+  .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .tabs {
+    display: flex; align-items: stretch;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .tab-new {
+    width: 32px; font-size: 15px; color: var(--text-dim);
+    background: var(--panel-2); border-right: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* 文件树 toggle icon:tab bar 最左,[+] 左边 */
+  .tab-filetree-toggle {
+    width: 32px; font-size: 14px; color: var(--text-dim2);
+    background: var(--panel-2); border-right: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: all 0.12s;
+  }
+  .tab-filetree-toggle:hover { background: var(--hover); color: var(--magic); }
+  .tab-filetree-toggle.active {
+    color: var(--magic);
+    background: rgba(191, 90, 242, 0.12);
+    box-shadow: inset 0 -2px 0 var(--magic);
+  }
+  .tab {
+    padding: 5px 12px; font-size: 12px; color: var(--text-dim);
+    border-right: 1px solid var(--border-soft); cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    border-bottom: 2px solid transparent;
+    max-width: 220px;
+  }
+  .tab:hover { background: var(--hover); color: var(--text); }
+  .tab.active {
+    color: var(--text); background: var(--bg);
+    border-bottom-color: var(--accent);
+  }
+  .tab .tab-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tab-close {
+    opacity: 0; width: 14px; color: var(--text-dim2); font-size: 11px;
+  }
+  .tab:hover .tab-close { opacity: 1; }
+  .tab.pinned {
+    border-left: 2px solid rgba(191, 90, 242, 0.35);
+    background: linear-gradient(to bottom, var(--panel), var(--panel-2));
+  }
+  .tab.pinned .tab-name { color: var(--magic); font-weight: 500; }
+  .tab.pinned.active { border-bottom-color: var(--magic); background: var(--panel); }
+
+  /* Split layout */
+  .split { flex: 1; display: flex; min-height: 0; }
+  .split-left { flex: 2.2; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .split-divider {
+    width: 2px; background: rgba(191, 90, 242, 0.3); flex-shrink: 0;
+  }
+  .split-right {
+    flex: 1; min-width: 320px; max-width: 380px;
+    display: flex; flex-direction: column; background: var(--panel);
+  }
+
+  /* Browser mock */
+  .browser-pane { display: flex; flex-direction: column; height: 100%; }
+  .br-bar {
+    display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--border-soft);
+  }
+  .br-btn {
+    width: 22px; height: 22px; border-radius: 4px; color: var(--text-dim);
+    display: flex; align-items: center; justify-content: center; font-size: 11px;
+  }
+  .br-url {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 8px; font-size: 11px;
+    font-family: 'SF Mono', monospace; color: var(--text-dim);
+  }
+  .br-content {
+    flex: 1; background: #fafafa; color: #1f1f23; overflow: auto;
+    padding: 30px; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 16px;
+  }
+  .br-logo {
+    font-size: 36px; font-weight: 700;
+    background: linear-gradient(135deg, #4285f4, #ea4335);
+    -webkit-background-clip: text; color: transparent;
+  }
+  .br-search {
+    width: 320px; padding: 10px 16px; border-radius: 24px;
+    border: 1px solid #dadce0; font-size: 13px; color: #3c4043; background: #fff;
+  }
+
+  /* Silent Chat */
+  .silent-section { border-bottom: 1px solid var(--border-soft); padding: 10px 14px; }
+  .silent-section:last-child { flex: 1; border-bottom: none; }
+  .ss-head {
+    color: var(--text-dim); font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+  }
+  .push-card {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px; font-size: 11.5px; color: var(--text-dim);
+    text-align: center;
+  }
+  .msg { margin-bottom: 10px; font-size: 12px; }
+  .msg-role { font-size: 9.5px; color: var(--text-dim2); margin-bottom: 3px; font-weight: 600; text-transform: uppercase; }
+  .msg.agent .msg-role { color: var(--magic); }
+  .msg-body {
+    padding: 7px 10px; border-radius: 8px; background: var(--panel-2);
+    border: 1px solid var(--border); line-height: 1.5;
+  }
+  .chat-input-box {
+    margin-top: 10px; display: flex; gap: 4px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 4px 4px 8px;
+  }
+  .chat-input-box input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--text); font: inherit; font-size: 12px; padding: 2px 0;
+  }
+
+  /* Annotations */
+  .annotations {
+    max-width: 1400px; margin: 0 auto;
+    padding: 14px 20px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px; color: var(--text-dim);
+    margin-bottom: 24px;
+  }
+  .annotations strong { color: var(--text); font-weight: 600; }
+  .annotations kbd {
+    background: var(--panel-3); color: var(--text); padding: 1px 6px;
+    border: 1px solid var(--border); border-radius: 3px;
+    font-family: 'SF Mono', monospace; font-size: 11px;
+  }
+
+  .arrow-row {
+    max-width: 1400px; margin: 10px auto 20px;
+    text-align: center; color: var(--magic); font-size: 13px;
+  }
+  .arrow-row span { display: inline-block; padding: 6px 14px; background: var(--magic-soft); border-radius: 999px; border: 1px solid rgba(191, 90, 242, 0.3); }
+
+  /* Callout pointer (annotate ws tip) */
+  .tip-callout {
+    position: absolute; right: -160px; top: 2px;
+    padding: 4px 10px; background: rgba(191, 90, 242, 0.15);
+    border: 1px solid rgba(191, 90, 242, 0.4); border-radius: 6px;
+    color: var(--magic); font-size: 10.5px; white-space: nowrap;
+    pointer-events: none;
+  }
+  .tip-callout::before {
+    content: ''; position: absolute; left: -6px; top: 50%;
+    transform: translateY(-50%);
+    width: 0; height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-right: 6px solid rgba(191, 90, 242, 0.4);
+  }
+</style>
+</head>
+<body>
+
+<div class="doc-head">
+  <div class="doc-title">Silent Agent · Prototype v0.2 · Pinned File Tree</div>
+  <div class="doc-sub">LeftNav = 脑子切换;文件树 = 工作心流。Tip 点击切换:LeftNav 窄化 → 中间插入文件树,浏览器 0 挤压。</div>
+</div>
+
+<!-- ===================== FRAME A — 闭合态 ===================== -->
+<div class="frame">
+  <div class="frame-label">
+    <span class="frame-num">A</span>
+    <span class="frame-title">闭合态 · 现状</span>
+    <span class="frame-desc">Session 右侧 <code>ws</code> tip 悬停高亮、可点,LeftNav 保持完整</span>
+  </div>
+
+  <div class="app">
+    <div class="titlebar">
+      <div class="traffic"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+      <div class="title-center">Silent Agent · #logid-debug</div>
+      <div style="width: 50px;"></div>
+    </div>
+    <div class="main">
+      <!-- LeftNav: wide -->
+      <aside class="left">
+        <div class="left-section">
+          <div class="agent-id">
+            <div class="agent-avatar">S</div>
+            <div>
+              <div class="agent-name">Silent Agent</div>
+              <div class="agent-tag">v0.1 · 待命</div>
+            </div>
+          </div>
+          <div style="margin-bottom: 4px;">
+            <div class="section-head">📡 消息渠道</div>
+            <div class="nav-item"><span class="ni-icon">💬</span><span class="ni-text">飞书 IM</span></div>
+            <div class="nav-item"><span class="ni-icon">📧</span><span class="ni-text">邮箱</span></div>
+          </div>
+          <div>
+            <div class="section-head">📚 知识库</div>
+            <div class="nav-item"><span class="ni-icon">🛠</span><span class="ni-text">Skills</span><span class="ni-meta">0</span></div>
+            <div class="nav-item"><span class="ni-icon">🧠</span><span class="ni-text">Memory</span></div>
+          </div>
+        </div>
+
+        <div class="left-section">
+          <div class="section-head">
+            <span>💬 会话 / 工作区</span>
+            <button style="color: var(--text-dim);">＋</button>
+          </div>
+          <div class="session-item active" style="position: relative;">
+            <div class="si-row">
+              <span class="si-type">📁</span>
+              <span class="si-name">logid-debug</span>
+              <span class="si-tag ws-clickable" title="点击展开文件树">ws</span>
+              <span class="live-dot"></span>
+            </div>
+            <div class="tip-callout">点这里展开文件树 →</div>
+          </div>
+          <div class="session-item">
+            <div class="si-row">
+              <span class="si-type">📁</span>
+              <span class="si-name">my-project</span>
+              <span class="si-tag ws-clickable">ws</span>
+            </div>
+          </div>
+          <div class="session-item">
+            <div class="si-row">
+              <span class="si-type">💬</span>
+              <span class="si-name">random</span>
+              <span class="si-tag ws-clickable">ws</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center -->
+      <main class="center">
+        <div class="tabs">
+          <button class="tab-filetree-toggle" title="工作区文件">📁</button>
+          <button class="tab-new">＋</button>
+          <div class="tab active">
+            <span class="tab-name">🌐 baidu.com</span>
+            <span class="tab-close">×</span>
+          </div>
+          <div class="tab" style="color: var(--text-dim2);">
+            <span class="tab-name">🖥 Terminal · ~/logid-debug</span>
+          </div>
+          <div style="flex: 1;"></div>
+          <div class="tab pinned active" style="margin-left: auto;">
+            <span class="tab-name">🤖 Silent Chat</span>
+          </div>
+        </div>
+        <div class="split">
+          <div class="split-left browser-pane">
+            <div class="br-bar">
+              <button class="br-btn">‹</button>
+              <button class="br-btn">›</button>
+              <button class="br-btn">↻</button>
+              <div class="br-url">🔒 https://www.baidu.com</div>
+            </div>
+            <div class="br-content">
+              <div class="br-logo">Bai du</div>
+              <input class="br-search" placeholder="百度一下" />
+            </div>
+          </div>
+          <div class="split-divider"></div>
+          <div class="split-right">
+            <div class="silent-section">
+              <div class="ss-head">🔔 Push · 观察中...</div>
+              <div class="push-card">正在记录浏览器 + 接口行为<br><span style="font-size: 10px; color: var(--text-dim2);">events.jsonl · 14 事件 · 2 分钟</span></div>
+            </div>
+            <div class="silent-section">
+              <div class="ss-head">💬 问答</div>
+              <div class="msg agent">
+                <div class="msg-role">Agent</div>
+                <div class="msg-body">你好,当前 session 是 logid-debug 工作区,随时问我。</div>
+              </div>
+              <div class="chat-input-box">
+                <input placeholder="说点什么..." />
+                <button style="color: var(--accent);">↑</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-row">
+  <span>👆 点 <strong style="color: var(--magic); font-weight: 600;">ws</strong> tip → LeftNav 窄化 + 文件树插入 👇</span>
+</div>
+
+<!-- ===================== FRAME B — 展开态 ===================== -->
+<div class="frame">
+  <div class="frame-label">
+    <span class="frame-num">B</span>
+    <span class="frame-title">展开态 · 文件树激活</span>
+    <span class="frame-desc">LeftNav 压到 100px(纯横向,垂直尺寸不变)· 每条会话 2 行(名字+状态 / 路径+时间)cmux 风 · 文件树 190px · 浏览器几乎不挤压</span>
+  </div>
+
+  <div class="app">
+    <div class="titlebar">
+      <div class="traffic"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+      <div class="title-center">Silent Agent · #logid-debug · <span style="color: var(--magic);">📁 files</span></div>
+      <div style="width: 50px;"></div>
+    </div>
+    <div class="main">
+      <!-- LeftNav: narrow — 保持垂直尺寸,只横向压缩,会话 2 列 grid -->
+      <aside class="left narrow">
+        <div class="left-section">
+          <div class="agent-id">
+            <div class="agent-avatar">S</div>
+            <div>
+              <div class="agent-name">Silent</div>
+              <div class="agent-tag">v0.1</div>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 4px;">
+            <div class="section-head">📡 渠道</div>
+            <div class="nav-item"><span class="ni-icon">💬</span><span class="ni-text">飞书 IM</span></div>
+            <div class="nav-item"><span class="ni-icon">📧</span><span class="ni-text">邮箱</span></div>
+          </div>
+
+          <div style="margin-bottom: 4px;">
+            <div class="section-head">📆 工作流</div>
+            <div class="nav-item"><span class="ni-icon">📅</span><span class="ni-text">日程</span></div>
+            <div class="nav-item"><span class="ni-icon">☑️</span><span class="ni-text">TODO</span></div>
+          </div>
+
+          <div>
+            <div class="section-head">📚 知识库</div>
+            <div class="nav-item"><span class="ni-icon">🛠</span><span class="ni-text">Skills</span></div>
+            <div class="nav-item"><span class="ni-icon">🧠</span><span class="ni-text">Memory</span></div>
+          </div>
+        </div>
+
+        <div class="left-section">
+          <div class="section-head">
+            <span>💬 会话</span>
+            <button class="expand-btn" title="恢复完整宽度">«</button>
+          </div>
+          <!-- 每条 2 行:上名字+status,下路径/时间。cmux 风卡片 -->
+          <div class="session-item active">
+            <div class="si-line1">
+              <span class="si-name">logid-debug</span>
+              <span class="live-dot"></span>
+            </div>
+            <div class="si-line2">ws · 2 分钟前</div>
+          </div>
+          <div class="session-item">
+            <div class="si-line1">
+              <span class="si-name">my-project</span>
+            </div>
+            <div class="si-line2">~/code/myproject · 昨天</div>
+          </div>
+          <div class="session-item">
+            <div class="si-line1">
+              <span class="si-name">random</span>
+            </div>
+            <div class="si-line2">chat · 3 天前</div>
+          </div>
+          <div class="session-item" style="color: var(--text-dim2);">
+            <div class="si-line1">
+              <span class="si-name">＋ 新建</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- File Tree Panel -->
+      <aside class="file-tree-panel">
+        <div class="ft-head">
+          <span>📁 工作区文件</span>
+        </div>
+        <div class="ft-head-path" style="padding: 4px 10px 6px;">~/code/logid-debug</div>
+        <div class="ft-body">
+          <div class="tree-node folder open">
+            <span class="icon">📂</span>
+            <span class="nm">screenshots</span>
+          </div>
+          <div class="tree-subtree">
+            <div class="tree-node file">
+              <span class="icon">🖼</span>
+              <span class="nm">error-20260423.png</span>
+            </div>
+            <div class="tree-node file">
+              <span class="icon">🖼</span>
+              <span class="nm">dashboard.png</span>
+            </div>
+          </div>
+          <div class="tree-node folder">
+            <span class="icon">📁</span>
+            <span class="nm">logs</span>
+          </div>
+          <div class="tree-node file">
+            <span class="icon">📄</span>
+            <span class="nm">README.md</span>
+          </div>
+          <div class="tree-node file active">
+            <span class="icon">📄</span>
+            <span class="nm">notes.md</span>
+          </div>
+          <div class="tree-node file">
+            <span class="icon">📄</span>
+            <span class="nm">logid-analysis.md</span>
+          </div>
+          <div class="tree-node file">
+            <span class="icon">📊</span>
+            <span class="nm">data.csv</span>
+          </div>
+          <div class="tree-node file" style="color: var(--text-dim2); font-style: italic;" title=".silent/ 默认隐藏">
+            <span class="icon">⚙️</span>
+            <span class="nm">.silent/  (隐藏)</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center (same width as closed state effectively) -->
+      <main class="center">
+        <div class="tabs">
+          <button class="tab-filetree-toggle active" title="工作区文件(点击收起)">📁</button>
+          <button class="tab-new">＋</button>
+          <div class="tab active">
+            <span class="tab-name">🌐 baidu.com</span>
+            <span class="tab-close">×</span>
+          </div>
+          <div class="tab" style="color: var(--text-dim2);">
+            <span class="tab-name">🖥 Terminal</span>
+          </div>
+          <div class="tab" style="color: var(--text-dim2);">
+            <span class="tab-name">📄 notes.md</span>
+          </div>
+          <div style="flex: 1;"></div>
+          <div class="tab pinned active" style="margin-left: auto;">
+            <span class="tab-name">🤖 Silent Chat</span>
+          </div>
+        </div>
+        <div class="split">
+          <div class="split-left browser-pane">
+            <div class="br-bar">
+              <button class="br-btn">‹</button>
+              <button class="br-btn">›</button>
+              <button class="br-btn">↻</button>
+              <div class="br-url">🔒 https://www.baidu.com</div>
+            </div>
+            <div class="br-content">
+              <div class="br-logo">Bai du</div>
+              <input class="br-search" placeholder="百度一下" />
+            </div>
+          </div>
+          <div class="split-divider"></div>
+          <div class="split-right">
+            <div class="silent-section">
+              <div class="ss-head">🔔 Push · 观察中...</div>
+              <div class="push-card">正在记录浏览器 + 接口行为</div>
+            </div>
+            <div class="silent-section">
+              <div class="ss-head">💬 问答</div>
+              <div class="msg agent">
+                <div class="msg-role">Agent</div>
+                <div class="msg-body">点文件树里的文件可直接开 file tab。</div>
+              </div>
+              <div class="chat-input-box">
+                <input placeholder="说点什么..." />
+                <button style="color: var(--accent);">↑</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<!-- Annotations -->
+<div class="annotations">
+  <div style="margin-bottom: 8px;"><strong>关键设计点</strong></div>
+  <div style="margin-left: 14px; line-height: 1.9;">
+    1. <strong>LeftNav 职责</strong> = 脑子切换(agent 维度 / session 切换) —— 保持现有 sections<br>
+    2. <strong>文件树职责</strong> = 工作心流 —— session 特定,点 session 的 <span style="color: var(--magic);">ws</span> tip 才进入<br>
+    3. <strong>触发交互</strong>:点 session 行右侧 <span style="color: var(--magic);">ws</span> tip 或 tab bar 最左 <span style="color: var(--magic);">📁</span> icon → LeftNav 窄化(~96px) + 文件树 panel(220px) 插入<br>
+    4. <strong>关闭</strong>:再点 tab bar 的 <span style="color: var(--magic);">📁</span> icon → 文件树收起、LeftNav 恢复宽。Icon 常驻 tab bar 作为唯一 toggle<br>
+    5. <strong>切换 session</strong>:文件树自动 follow active session 的 workspace path<br>
+    6. <strong>窄 LeftNav</strong>:1 icon + 2 字密度,顶部继续显示消息渠道/工作流/知识库入口;中间一条 1px 分割;底部会话(无 icon,仅文字)。顶部 <kbd>« 展开</kbd> 回到完整模式<br>
+    7. <strong>浏览器几乎不挤压</strong>:<code>256 → 96+220=316</code>,中间工作区减 60px(相对 1400 窗宽 <4%,可接受)
+  </div>
+</div>
+
+</body>
+</html>

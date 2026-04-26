@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Silent Agent</title>
+    <!--
+      CSP 说明:
+      - script-src 加 'unsafe-eval' 是 Monaco 要求(内部用 new Function 构建 tokenizer 等)
+      - worker-src 和 script-src 都加 blob: 让 Vite 本地 worker 能起
+      - img-src 加 blob: 也是给编辑器用
+      - 不加 'unsafe-inline' script,保持主脚本必须 module-based
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; worker-src 'self' blob:;"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
