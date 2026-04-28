@@ -10,6 +10,7 @@ export const ipc = {
   terminal: window.api.terminal,
   file: window.api.file,
   review: window.api.review,
+  chat: window.api.chat,
 }
 
 export type IpcClient = typeof ipc

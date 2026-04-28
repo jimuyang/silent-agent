@@ -6,24 +6,29 @@
 
 ## TL;DR
 
-- **Workspace = 一个 git 仓库**,所有变化由 git 管版本。**Workspace 版本 = git commit SHA**
+- **Workspace = 一个 git 仓库**,但 git 只管"内容版本",**logs(events / main_chat / main_review)不进 git**
+- **两条独立时间轴**:
+  - **Git history**(产物的 commit 序列)— 答 "在 t 时刻 workspace 内容长啥样"
+  - **events.jsonl**(append-only timeline)— 答 "在 t 时刻 workspace 发生了什么"
 - **`WorkspaceVCS` 是 workspace 同级的能力对象**:`emit / commit / log / diff / show / status / branch / checkout`
-- **应用内 module 主动 emit**(TabManager / BrowserTabRuntime / 等),写 `events.jsonl` + 按规则自动 commit。**没有 chokidar,不监听用户外部文件**
-- **用户编辑文件懒发现**:vim :w 后无 event,但下次 emit 触发 commit 时 `git status` 自然捡进版本
-- **Agent meta-skill**:agent-core 把 `WorkspaceVCS` 几个只读方法(log / diff / show / status)+ 显式 commit / branch / checkout 暴露成 builtin tool,任何 agent 都能用
-- **快照子系统**:browser 用 Defuddle 抽干净 .md,terminal 在命令边界切 .log;每 tab 都有 `latest.md` / `latest.log` **(copy,非 symlink)**,`git log -p latest.md` 一行命令看页面演化
-- **唯一例外**:`buffer.log` 高频 pty 数据流不进 git(信息冗余在 NNN-cmd.log)
+- **应用内 module 主动 emit**,写 `events.jsonl` + 按规则可能触发 git commit;**git status 空时 skip empty commit**(timeline 仍在 events.jsonl 里)
+- **没有 chokidar**,用户编辑文件 by `git status` 在 next trigger 时懒发现
+- **Agent meta-skill**:agent-core 把 `WorkspaceVCS` 几个只读方法(log / diff / show / status)+ 显式 commit / branch / checkout 暴露成 builtin tool;**main_chat agent 是工作区主权**,通过 vcs + browser/terminal/file tools 调度该 workspace 全部资源
+- **Events 2 层结构**:Layer 1 events.jsonl 行 < 1KB(summary + ref);Layer 2 detail 是独立 immutable 文件(snapshot / suggestion / skill)或 stream message id
+- **快照子系统**:browser Defuddle .md,terminal NNN-cmd.log;每 tab `latest.md` / `latest.log`(copy 不是 symlink),`git log -p latest.md` 看页面演化
+- **`buffer.log` 不进 git**(信息冗余 NNN-cmd.log)
 
 ## 设计目标与约束
 
 | 目标 | 约束 |
 |---|---|
-| **G1 git 是真相源** | workspace 版本 = git sha,不另立 anchor / journal cursor;empty commit 不可能(events.jsonl 永远有增量) |
+| **G1 git 管内容,logs 管时序** | 两条独立时间轴;events / main_chat / main_review jsonl 全部 `.gitignore` |
 | **G2 不监听外部 fs** | 没有 chokidar,用户编辑文件 by `git status` 在 next trigger 时懒发现 |
-| **G3 单一 emit 入口** | 应用内 module 主动调 `vcs.emit(evt)` —— 一次调用做两件事:append events.jsonl + 按规则匹配可能 commit |
-| **G4 meta-skill 暴露** | `WorkspaceVCS` 同时是 app 内部 API + 暴露给 agent 的 builtin tools |
-| **G5 git 工具兼容** | 用户用 GitHub Desktop / GitButler / `git log` CLI 都能正确看到 workspace 历史 |
+| **G3 单一 emit 入口** | 应用内 module 主动调 `vcs.emit(evt)` —— 一次调用做两件事:append events.jsonl + 按规则匹配可能 commit(若 status 空则 skip) |
+| **G4 meta-skill 暴露** | `WorkspaceVCS` 同时是 app 内部 API + 暴露给 agent 的 builtin tools(main_chat 是工作区主权 agent) |
+| **G5 git 工具兼容** | 用户用 GitHub Desktop / GitButler / `git log` CLI 都能正确看到 workspace 历史(干净:只有真·内容变化) |
 | **G6 隐私 / 安全** | 高频 pty 流不入 git;敏感字段(token / cookie / Authorization)永不写 events.jsonl |
+| **G7 Events 2 层结构** | Layer 1 events.jsonl 行 < 1KB,Layer 2 detail 通过 `meta.detailPath`(immutable 文件)或 `meta.messageId`(stream 单条)引用 |
 
 **非目标**(留给 v0.2+):多级摘要 pipeline / 跨 workspace 同步 / 实时事件 stream sink / MCP server 暴露 / 通用 npm package 化
 
@@ -33,8 +38,9 @@
 flowchart TB
     subgraph WS["Workspace(一个 git repo)"]
         direction TB
-        WSDir[".silent/<br/>tabs.json · events.jsonl · messages.jsonl<br/>tabs/&lt;tid&gt;/snapshots/NNN-*.md<br/>tabs/&lt;tid&gt;/latest.md"]
-        UserFiles["用户文件<br/>notes.md / src/ / data.csv"]
+        WSDirGit[".silent/ 顶层 (✅ git)<br/>meta.yaml · tabs/&lt;tid&gt;/latest.md · tabs/&lt;tid&gt;/latest-cmd.log"]
+        WSDirRuntime[".silent/runtime/ 子目录 (❌ .gitignore 整个目录)<br/>events.jsonl · main_chat.jsonl · main_review.jsonl<br/>tabs.json · tabs/&lt;tid&gt;/{snapshots,buffer.log} · state/"]
+        UserFiles["用户文件 (✅ git)<br/>notes.md / src/ / data.csv"]
         Git[(.git/)]
     end
 
@@ -65,43 +71,54 @@ flowchart TB
     style WS fill:#1a3a5c,color:#fff
 ```
 
-## 1. Git 资源清单(全在 git working tree)
+## 1. Git 边界 = `.silent/runtime/` 子目录边界
 
-按"进 git / 不进 git"清晰切分,**所有需要"回得到那一刻"的内容都进 git**。
-
-### 进 git(workspace 真相源)
+**git 只 track workspace 的"当前真状态"**;时序 / 历史 / 派生 / cache 全部进 `.silent/runtime/` 子目录,整目录 `.gitignore`。
 
 ```
 <workspace>/
-├── .git/                                    repo 元数据
-├── .gitignore                               默认配置见下
-├── .silent/
-│   ├── meta.yaml                            工作区配置(name / linkedFolder),lastActiveAt 已拆出
-│   ├── tabs.json                            tab 索引(open/close/state-change 时重写)
-│   ├── messages.jsonl                       ★ silent-chat tab 对话全文(append)
-│   ├── events.jsonl                         ★ workspace 单一事件时间线(append,app 主动写)
-│   └── tabs/
-│       └── <tid>/
-│           ├── snapshots/
-│           │   ├── 001-<ts>.md              immutable(browser readability 或 terminal cmd)
-│           │   ├── 002-<ts>.md
-│           │   └── 003-<ts>.md
-│           └── latest.md (or .log)          ★ copy of newest snapshot,git log -p 看演化
-└── 用户的任何文件                              notes.md / src/ / data.csv / ...
+├── .git/
+├── .gitignore                                  仅一行: .silent/runtime/
+├── .silent/                                    ★ workspace 标识(类比 .git/)
+│   ├── meta.yaml                               ✅ git · 配置(name / linkedFolder)
+│   ├── tabs/<tid>/
+│   │   ├── latest.md                           ✅ git · browser 当前页面(Defuddle 抽出)
+│   │   └── latest-cmd.log                      ✅ git · terminal 最近命令输出
+│   └── runtime/                                ❌ gitignore(整个子目录)
+│       ├── events.jsonl                        timeline log(append,2 层 Layer 1)
+│       ├── main_chat.jsonl                     main_chat agent 对话流(messageId 源)
+│       ├── main_review.jsonl                   main_review agent 对话流(messageId 源)
+│       ├── tabs.json                           UI 状态(disk 当前态恢复)
+│       ├── tabs/<tid>/
+│       │   ├── snapshots/NNN-<ts>.{md,log}     immutable 历史切片(序列即 log)
+│       │   └── buffer.log                      pty raw 流
+│       └── state/                              runtime cache
+│           ├── last-active.json
+│           ├── cookies/
+│           └── cache/
+└── notes.md / src/ / data.csv                  ✅ git · 用户内容
 ```
 
-### 不进 git(运行时 / 隐私 / 高频冗余)
+**为什么这样切**:
 
-```
-.silent/state/                               全部 .gitignore
-├── last-active.json                         touchWorkspace 高频更新,污染版本
-├── active.json                              当前 active tab(纯 UI)
-├── cookies/                                 内嵌浏览器 storage(隐私)
-└── cache/                                   任何重建型缓存
+| 类型 | 为什么不进 git |
+|---|---|
+| append-only logs(events / main_chat / main_review)| 本身就是 monotonic truth;git pack 不会比 cat 文件便宜;git diff 噪声大;时点查询用 `head -n <line>` 即可 |
+| immutable NNN 切片(snapshots/) | 序列由 NNN 排序就是 log,不需要 git 加额外时间维度 |
+| buffer.log / cache | 高频 / 派生 / 可重建 |
+| tabs.json | UI 状态,从 disk 当前态恢复就够;改动太频繁,git 永远 dirty |
 
-.silent/tabs/<tid>/
-└── buffer.log                               ★ 高频 pty 数据流,信息已在 snapshots/NNN-cmd.log
-```
+**为什么这些进 git**:
+
+| 类型 | 为什么进 git |
+|---|---|
+| 用户文件 | 真·内容,需要内容版本化 |
+| meta.yaml | workspace 身份,低频改动,值得追踪 |
+| `latest.md`(browser 当前页面) | mutable 文件,`git log -p` 看页面演化 |
+| `latest-cmd.log`(terminal 最近命令) | mutable,`git log -p` 看终端用过哪些命令 |
+| skill yaml(`agents/<aid>/skills/`) | 沉淀的资产,跨设备同步核心 |
+
+**核心**:`.silent/runtime/` 目录边界 = git 边界。`.gitignore` 一行,心智零负担。删 `.silent/runtime/` 不影响 workspace 身份和真状态,只丢历史。
 
 ### 默认 `.gitignore`
 
@@ -122,13 +139,14 @@ node_modules/
 __pycache__/
 target/
 
-# Silent Agent 运行时
-.silent/state/
-.silent/tabs/*/buffer.log
+# Silent Agent · 整个 runtime 子目录(logs / cache / 历史切片 / UI 状态)
+.silent/runtime/
 
 # linkedFolder(动态写入,如有)
 # <linkedFolder relative path>/
 ```
+
+`.silent/runtime/` 一行覆盖所有 non-git 内容。review suggestion 详情在 `runtime/main_review.jsonl`(stream message),通过 `meta.messageId` 引用 —— 跟 chat 用 main_chat.jsonl 同构,**不另存独立 .md 文件**。
 
 **没有**默认 ignore 大二进制扩展(.mov / .psd 等)—— 改用 pre-commit hook 拦 > 10MB 文件。
 
@@ -189,14 +207,29 @@ export interface FileStatus {
 
 ```typescript
 const DEFAULT_RULES: AutoCommitRule[] = [
-  { match: { source: 'chat',      action: 'turn-end' },    debounceMs: 0,    msg: e => `[chat] turn: ${truncate(e.meta?.preview, 60)}` },
-  { match: { source: 'browser',   action: 'load-finish' }, debounceMs: 1000, msg: e => `[browser] load: ${new URL(e.target!).host}` },
-  { match: { source: 'shell',     action: 'exit' },        debounceMs: 0,    msg: e => `[shell] exec: ${truncate(e.meta?.cmd, 60)}` },
-  { match: { source: 'workspace', action: 'idle' },        debounceMs: 0,    msg: '[workspace] idle flush' },
+  // 浏览器 / 终端的 latest.* 在 git 里,这两条规则真触发 commit
+  { match: { source: 'browser', action: 'load-finish' }, debounceMs: 1000,
+    after: 'cp latest.md',                  // BrowserTabRuntime 在 emit 前已 cp
+    msg: e => `[browser] load: ${new URL(e.target!).host}` },
+
+  { match: { source: 'shell', action: 'exit' }, debounceMs: 0,
+    after: 'cp latest-cmd.log',             // TerminalTabRuntime 在 emit 前已 cp
+    msg: e => `[shell] exec: ${truncate(e.meta?.cmd, 60)}` },
+
+  // 用户文件保存(没 watcher,实际由 main_chat 用 file.write tool 时 emit;或 idle 兜底拣)
+  { match: { source: 'fs', action: 'save', pathFilter: '!.silent/**' },
+    debounceMs: 1000,
+    msg: e => `[fs] save: ${e.target}` },
+
+  // 兜底:30s idle 时如果有 dirty(用户外部编辑等),commit 一次
+  { match: { source: 'workspace', action: 'idle' }, debounceMs: 0,
+    msg: '[workspace] idle flush' },
 ]
 ```
 
-> ⚠️ **没有 `fs.save` 规则** —— 因为没有 chokidar 监听用户文件。用户编辑由下一次其他 trigger 时 `git status` 懒发现,自然进版本。
+> ⚠️ **`chat.turn-end` 不在规则里** —— chat / messages 在 runtime/,turn-end 时 git status 通常没变化(除非 agent 用 file.write tool 改了用户文件,那条 `fs.save` 规则会接住)。chat 完整时序记录在 `runtime/main_chat.jsonl` + `runtime/events.jsonl`,git history 不需要 chat 噪音。
+
+> ⚠️ **没 chokidar 监听用户文件** —— `fs.save` 事件由应用内 module(主要是 main_chat agent 调 `file.write` tool 时)主动 emit;用户在外部编辑器改文件(vim :w 等)由 idle 30s 兜底捡进 git。
 
 每个 commit footer 反向链回 event:
 
@@ -209,29 +242,38 @@ ts: 2026-04-28T10:32:42.123Z
 event-id: evt_abc123
 ```
 
-**关键**:events.jsonl 在 git 里 → 任何 Tier 1 边界永远非空 → empty commit skip 规则不需要。
+**关键**:events.jsonl **不在** git 里(timeline 自管),所以 Tier 1 边界触发 commit 时,如果 git status 是空(纯 chat turn 没产物变化、或 shell.exit 但工作目录没新文件),**skip empty commit**。timeline 仍在 events.jsonl 完整记录,git history 只记录真·内容变化。
+
+→ **git history 干净度**:1 小时混合工作可能只有 5-10 个 commit(snapshot / 用户文件变化触发),events.jsonl 同期可能 200+ 行(full timeline)。两条独立轴,各司其职。
 
 ## 4. emit / commit 命中规则一览
 
 应用内 module 调用 `vcs.emit(...)` 时,**所有 evt 都 append 到 events.jsonl**;只有命中 Tier 1 规则的 evt 触发 commit:
 
-| evt | 进 events.jsonl? | 命中规则 → commit? |
+| evt | 进 events.jsonl? | 命中规则 → commit?(只在 git status dirty 时才真 commit) |
 |---|---|---|
-| `tab.focus` | ✅ | ❌ 只记录(focus 抖动不该 commit) |
-| `tab.open / close` | ✅ | ❌ 只记录(由后续 trigger 顺手捡 tabs.json 变化) |
-| `browser.navigate` | ✅ | ❌ 只记录(等 load-finish) |
-| `browser.navigate-in-page` | ✅ | ❌ 只记录 |
-| `browser.load-finish` | ✅ | ✅ 1s debounce → commit(SPA 多帧合并) |
-| `browser.request`(网络抓包,脱敏后) | ✅ | ❌ 只记录 |
-| `shell.exec`(preexec) | ✅ | ❌ 只记录(与 exit 配对) |
-| `shell.exit` | ✅ | ✅ 0ms → commit |
-| `shell.output`(pty chunks) | ❌ 不进 events.jsonl(太碎,落 buffer.log) | — |
-| `chat.user-turn` | ✅ | ❌ 只记录 |
-| `chat.tool-use / tool-result` | ✅ | ❌ 只记录 |
-| `chat.turn-end` | ✅ | ✅ 0ms → commit |
-| `agent.*`(agent 内部动作) | ✅ | ❌ 只记录 |
-| `workspace.idle`(IdleTimer 调) | ✅ | ✅ 0ms → commit if dirty(兜底) |
-| `linked.probe` | ✅ | ❌ 只记录 |
+| `tab.focus` | ✅ | ❌(只 emit 到 events.jsonl) |
+| `tab.open / close` | ✅ | ❌(tabs.json 在 runtime/,不进 git;commit 不感知) |
+| `browser.navigate` | ✅ | ❌(等 load-finish) |
+| `browser.load-finish` | ✅ | ✅ 1s debounce → cp `latest.md` 后 commit(latest.md 在 git,真有变化) |
+| `browser.request`(脱敏) | ✅ | ❌ |
+| `shell.exec`(preexec) | ✅ | ❌ |
+| `shell.exit` | ✅ | ✅ 0ms → cp `latest-cmd.log` 后 commit |
+| `shell.output`(pty chunk) | ❌(碎,落 buffer.log → runtime) | — |
+| `chat.user-turn / tool-use / tool-result` | ✅ | ❌(messages 在 runtime/,不进 git) |
+| `chat.turn-end` | ✅ | ⚠️ 触发 try-commit,**但 git status 通常空 → skip**(除非 chat 中 agent 改了用户文件,fs.save 已经 commit 过) |
+| `agent.*`(内部动作) | ✅ | ❌ |
+| `fs.save` 在用户文件(非 .silent/) | ✅ | ✅ 1s debounce → commit |
+| `workspace.idle 30s` ∧ git status dirty | ✅ | ✅ 兜底 commit |
+| `linked.probe` | ✅ | ❌ |
+
+**关键观察**:大部分 emit 不触发 commit,因为它们的 detail 都在 runtime/(不在 git)。只有 4 类边界产生**真 commit**:
+1. `browser.load-finish` → `latest.md` cp 后(latest.md 在 git)
+2. `shell.exit` → `latest-cmd.log` cp 后(latest-cmd.log 在 git)
+3. `fs.save` 用户文件
+4. `workspace.idle 30s` ∧ dirty 兜底
+
+git history 因此非常干净 —— 一小时工作可能只有 5-15 个 commit,每个对应"真有内容变化"的瞬间。完整时序仍在 events.jsonl(几百行)里。
 
 ## 5. IdleTimer:不靠 watcher 实现 idle 兜底
 
@@ -405,10 +447,12 @@ workspace.checkout(ref)                         → vcs.checkout(ref)
 **用法 1 · "我离开半小时,用户做了啥?"**
 
 ```typescript
+// 两轴并行查:产物变化走 git,完整 timeline 走 events.jsonl
 const lastSeenSha = session.lastSeenSha
-const diff = await workspace.diff(lastSeenSha, 'HEAD')
-// → 一次拿到 events.jsonl 增量 + 文件变化 + 新 snapshot(unified diff text)
-//    LLM 直接读 diff 就理解了一切
+const lastSeenTs = session.lastSeenTs
+const diff = await workspace.diff(lastSeenSha, 'HEAD')          // 产物变化(文件 / snapshot)
+const events = await readEventsSince('.silent/events.jsonl', lastSeenTs) // 时间线(细粒度)
+// LLM 同时拿到两种视角:谁动了产物 + 中间发生了哪些 emit
 ```
 
 **用法 2 · "用户问我关于 logid xxx,我之前查过吗?"**

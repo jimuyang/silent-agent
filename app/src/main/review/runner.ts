@@ -1,12 +1,11 @@
 // [main · 桥接层 · 不直接 import 'electron']
-// Review runner:在一个 workspace 目录里跑 `claude -p`(plan mode),
-// 让 CC 自己读 events.jsonl + 跑 git log,找 pattern 出建议。
-// 输出 session_id + markdown suggestion;session_id 落到 .silent/state/cc-session.json,
-// 后续"在终端继续"时用 `claude --resume <id>` 续接同一会话。
+// Review runner:在一个 workspace 目录里跑 `claude -p`,让 CC 自己读 events.jsonl
+// + 跑 git log,找 pattern 出建议。
+// 每次 review 都是**独立系统调用**(用完即弃),不持久化 session id;
+// "发给主 agent 继续聊"是把 review 的 markdown 文本 inject 进主 agent 的 chat session,
+// 跟 review 的 CC session 没关系。
 
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 
 import type { ReviewResult } from '@shared/types'
 
@@ -42,19 +41,18 @@ interface CCResult {
 
 export interface RunReviewOpts {
   workspacePath: string
-  /** 已存在的 cc session id, 传则 --resume,不传则新开 */
-  resumeSessionId?: string
 }
 
 export async function runReview(opts: RunReviewOpts): Promise<ReviewResult> {
   const startedAt = Date.now()
+  // 每次 review 都是 fresh session(系统调用,用完即弃);CC 内部会创建新 session
+  // 文件,我们不读不写不 resume。
   const args = [
     '-p',
     '--output-format', 'json',
     '--permission-mode', 'acceptEdits',  // review 只读探索,但允许 Read/Bash 不被打断
     '--allowed-tools', 'Read,Bash(git*),Bash(ls*),Bash(cat*),Bash(head*),Bash(tail*),Bash(wc*)',
   ]
-  if (opts.resumeSessionId) args.push('--resume', opts.resumeSessionId)
 
   return new Promise((resolve) => {
     const cc = spawn('claude', args, {
@@ -116,58 +114,12 @@ export async function runReview(opts: RunReviewOpts): Promise<ReviewResult> {
         return
       }
 
-      // 持久化 session id 到 .silent/state/cc-session.json
-      if (parsed.session_id) {
-        await persistSessionId(opts.workspacePath, parsed.session_id, durationMs)
-      }
-
       resolve({
         ok: true,
-        sessionId: parsed.session_id,
+        sessionId: parsed.session_id,        // 仅返回供前端展示,不持久化
         suggestion: parsed.result?.trim() ?? '',
         durationMs,
       })
     })
   })
-}
-
-interface CcSessionFile {
-  sessionId: string
-  lastReviewAt: string
-  reviewCount: number
-}
-
-async function persistSessionId(
-  workspacePath: string,
-  sessionId: string,
-  _durationMs: number,
-): Promise<void> {
-  const stateDir = join(workspacePath, '.silent', 'state')
-  const file = join(stateDir, 'cc-session.json')
-  await mkdir(stateDir, { recursive: true })
-
-  let prev: CcSessionFile | null = null
-  try {
-    prev = JSON.parse(await readFile(file, 'utf-8')) as CcSessionFile
-  } catch {
-    /* first time */
-  }
-
-  const next: CcSessionFile = {
-    sessionId,
-    lastReviewAt: new Date().toISOString(),
-    reviewCount: (prev?.reviewCount ?? 0) + 1,
-  }
-  await writeFile(file, JSON.stringify(next, null, 2))
-}
-
-/** 读 workspace 已存的 cc session id(如有), 给后续 review 复用 + terminal --resume 用 */
-export async function readSessionId(workspacePath: string): Promise<string | null> {
-  try {
-    const file = join(workspacePath, '.silent', 'state', 'cc-session.json')
-    const data = JSON.parse(await readFile(file, 'utf-8')) as CcSessionFile
-    return data.sessionId
-  } catch {
-    return null
-  }
 }

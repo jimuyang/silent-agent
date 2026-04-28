@@ -147,6 +147,18 @@ MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 
 ---
 
+## 按需 — Tab 拖出独立 window
+
+把任意 tab(浏览器 / 终端 / 文件 / 主 chat)拖出 TabBar 变成一个独立 BrowserWindow,可以多屏摆放;拖回来重新归入原 workspace。
+- [ ] HTML5 drag API + 边界检测:tab 拖出 TabBar 区域 `dragend` 时触发 detach
+- [ ] `tab.detach(tabId, { x, y })` IPC:在 main 端 new BrowserWindow,把 WebContentsView / pty 句柄迁过去(BrowserView 可 `removeChildView` + `addChildView` 到新 window;pty 不动,IPC 信道改投新 window)
+- [ ] 独立 window 的关闭语义:关 = 销毁 tab(同 tab.close)/ 拖回主窗口 = 重新挂回 TabBar
+- [ ] tabs.json 加 `detachedWindowId?` 字段,持久化(关 app 重开时尝试恢复独立 window)
+- [ ] 多 BrowserWindow 时 IPC 路由按 `BrowserWindow.fromWebContents(event.sender)` 反查
+- [ ] TerminalTabRuntime / BrowserTabRuntime 的 `window` 引用要支持热切换(目前 readonly)
+
+---
+
 ## 按需 — 分栏升级(Level 1 / Level 2)
 
 详见 `design/02-architecture.md` 的"分栏演进路线"。v0.1 默认停在 Level 0(hardcoded B 模式 1.3:1)。
@@ -211,21 +223,39 @@ MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 - [ ] `LocalFsAdapter.appendEvent` 改成委托给 vcs(或保留作为底层 utility)
 - [ ] TabManager / BrowserTabRuntime / TerminalTabRuntime 调用从 `appendEventAt` → `vcs.emit`
 
+### 5c+ · 目录结构迁移到 `.silent/runtime/` 子目录(0.5d)
+> 设计依据:[`design/02-architecture.md`](design/02-architecture.md) 二分约定 / [`design/08-vcs.md`](design/08-vcs.md) §1。
+> **`git 边界 = .silent/runtime/ 子目录边界`**:`.silent/` 顶层仅放当前真状态(进 git),`.silent/runtime/` 装 logs/cache/历史(.gitignore)。
+- [ ] `shared/consts.ts` 加常量:`RUNTIME_DIR = 'runtime'`、`MAIN_CHAT_FILE = 'main_chat.jsonl'`、`MAIN_REVIEW_FILE = 'main_review.jsonl'`
+- [ ] `paths.ts` 加 `workspaceRuntimeDir(wsPath)` 等工具,所有 runtime 类文件都走它
+- [ ] 路径迁移:
+  - `events.jsonl`:`.silent/` → `.silent/runtime/`
+  - `messages.jsonl` → `.silent/runtime/main_chat.jsonl`(rename + 路径)
+  - 新增:`.silent/runtime/main_review.jsonl`(初始空)
+  - `tabs.json`:`.silent/state/` → `.silent/runtime/`
+  - `buffer.log`:`.silent/tabs/<tid>/` → `.silent/runtime/tabs/<tid>/`
+  - `snapshots/`:整个搬到 `.silent/runtime/tabs/<tid>/snapshots/`
+  - `state/*`(cookies / cache / last-active.json 等):整个搬到 `.silent/runtime/state/`
+- [ ] **保留进 git 顶层的**:`.silent/meta.yaml`、`.silent/tabs/<tid>/latest.md`、`.silent/tabs/<tid>/latest-cmd.log`(后两个新)
+- [ ] 一次性迁移脚本:`addWorkspace` 启动时检测旧布局(`.silent/events.jsonl` 在顶层)→ 迁到新位置 + 写迁移完成标记
+- [ ] `.gitignore` 更新成单行 `.silent/runtime/`
+- [ ] 验收:重启后老 workspace 自动迁移,events.jsonl 等都进 `runtime/`,顶层 .silent/ 只剩 git tracked 文件
+
 ### 5d · BrowserTabRuntime snapshot(Defuddle)(1d)
 - [ ] `npm i defuddle`
-- [ ] `app/src/main/snapshots/browser.ts` —— `did-finish-load` → `executeJavaScript('document.documentElement.outerHTML')` → `new Defuddle(html, url, {markdown:true}).parse()` → 落 `.silent/tabs/<tid>/snapshots/NNN-<ts>.md`
+- [ ] `app/src/main/snapshots/browser.ts` —— `did-finish-load` → `executeJavaScript('document.documentElement.outerHTML')` → `new Defuddle(html, url, {markdown:true}).parse()` → 落 `.silent/runtime/tabs/<tid>/snapshots/NNN-<ts>.md`(historic series, .gitignore)
 - [ ] 800ms timeout fallback 到 `innerText` 直存
-- [ ] **`latest.md` 用 copy 而非 symlink**(便于 `git log -p`)
+- [ ] **cp 到 `.silent/tabs/<tid>/latest.md`**(✅ git tracked,git log -p 看页面演化)
 - [ ] snapshot 文件头加 URL + title + ts meta(LLM 单文件可读)
-- [ ] 落盘后调 `vcs.emit({source:'browser', action:'load-finish', ...})`(命中 Tier 1 → 1s debounce → commit)
+- [ ] 落盘后调 `vcs.emit({source:'browser', action:'load-finish', meta:{summary, detailPath:".silent/runtime/tabs/<tid>/snapshots/NNN-..."}})` → 命中 Tier 1 → 1s debounce → commit(包含 latest.md 变化)
 - [ ] 内容 < 200 字符跳过(loading 骨架)
 
 ### 5e · TerminalTabRuntime snapshot(zsh hook)(1d)
 - [ ] `app/src/main/snapshots/terminal.ts`
-- [ ] `tabs/<tid>/buffer.log` — pty.onData append(**.gitignore**,信息冗余在 NNN-cmd.log 里)
+- [ ] `.silent/runtime/tabs/<tid>/buffer.log` — pty.onData append(.gitignore,信息冗余在 NNN-cmd.log)
 - [ ] zsh `preexec` / `precmd` hook 注入(或 prompt 分隔标记切分)
-- [ ] `preexec` → `vcs.emit({source:'shell', action:'exec', ...})`(只记录,不 commit)+ 记 `bufferStartOffset`
-- [ ] `precmd / exit` → 切片 `snapshots/NNN-<cmd-ts>.log` + cp 到 `latest.log` + `vcs.emit({source:'shell', action:'exit', ...})`(命中 Tier 1 → commit)
+- [ ] `preexec` → `vcs.emit({source:'shell', action:'exec', ...})`(只 emit,不触发 commit)+ 记 `bufferStartOffset`
+- [ ] `precmd / exit` → 切片 `runtime/tabs/<tid>/snapshots/NNN-<cmd-ts>.log` + **cp 到 `.silent/tabs/<tid>/latest-cmd.log`**(✅ git)+ `vcs.emit({source:'shell', action:'exit', meta:{summary, cmd, exitCode, durMs, detailPath:"runtime/tabs/<tid>/snapshots/NNN-..."}})` → 命中 Tier 1 → commit(包含 latest-cmd.log 变化)
 - [ ] 链式命令 `&&` / `;` 各自独立切片(每个 cmd 一个 commit)
 - [ ] 命令参数脱敏(token / 密码 / 私有 URL 白名单匹配后过滤)
 
@@ -323,6 +353,53 @@ MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 - [ ] `browser.waitForLoad(tabId)` —— 监听 `did-finish-load` 一次
 - [ ] `tabs.openBrowser(url)` / `tabs.openTerminal()`
 - [ ] (Playwright connectOverCDP 推 v0.2)
+
+### 6j · main_chat 主权 tool 集 — MCP server in-Electron(1d)
+> 设计依据:[`design/02-architecture.md`](design/02-architecture.md) "main_chat 是 workspace 主权 agent" 节。
+> **架构意义**:用户跟 main_chat 一个对话,就能让它代为操作整个 workspace —— 看页面、跑命令、改文件、读历史、commit、调起 review。main_chat 是用户在 workspace 的"放大器"。
+> **MVP 走 Claude Code subprocess** 路线时,这些 tool 通过 in-Electron MCP server 暴露给 CC。
+- [ ] `app/src/main/mcp/server.ts` —— Electron main 内嵌 HTTP MCP server,启动时拿动态端口
+- [ ] CC 启动时通过 `--mcp-config` 指向 `http://127.0.0.1:<port>`,自动 attach 我们的 tool 集
+- [ ] MCP server 暴露的 tool 集(per-workspace,通过当前 active workspaceId scope):
+
+  **Browser tools**(基于 Phase 6i 已有的 IPC):
+  - [ ] `browser.list_tabs()` → 当前 workspace 所有 browser tab 的 {id, url, title}
+  - [ ] `browser.navigate(tabId, url)`
+  - [ ] `browser.extract_text(tabId, selector?)` → 当前页面 readability 文本
+  - [ ] `browser.wait_for_load(tabId, timeoutMs?)`
+  - [ ] `browser.click(tabId, selector)` —— v0.2 接 Playwright 时升级
+  - [ ] `browser.screenshot(tabId)` → base64 png
+
+  **Terminal tools**:
+  - [ ] `terminal.list_tabs()` → 当前 workspace 所有 terminal tab 的 {id, cwd, lastCmd}
+  - [ ] `terminal.run(tabId, cmd, opts?)` → 写入 pty + 等待 next shell.exit + 返回 latest-cmd.log 内容
+  - [ ] `terminal.read_buffer(tabId, lines?)` → 读 buffer.log 末尾 N 行
+  - [ ] `terminal.send_keys(tabId, keys)` —— raw 注入(给 vim 等 TUI 用)
+
+  **File tools**(复用现有 file IPC):
+  - [ ] `file.read(path)` / `file.write(path, content)` / `file.list_dir(path)`
+  - [ ] 路径限制:必须在 workspace 内或 linkedFolder 内,跨界拒绝
+
+  **VCS tools**(workspace 版本能力,只读 + 显式 commit):
+  - [ ] `workspace.status()` / `workspace.log(opts?)` / `workspace.diff(refA, refB?, paths?)` / `workspace.show(sha)`
+  - [ ] `workspace.commit(message)`(Tier 2 显式 commit,覆盖 Tier 1 机械 message)
+  - [ ] `workspace.branch(name)` / `workspace.checkout(ref)`(给 agent 试错用,失败 rollback)
+
+  **Review tool**:
+  - [ ] `review.run()` —— main_chat 主动触发 review,拿到 markdown 建议(同步返回)
+
+  **Tab management**(给 agent 安排工作环境):
+  - [ ] `tab.open_browser(url)` / `tab.open_terminal(cwd?)` / `tab.close(tabId)` / `tab.focus(tabId)`
+
+- [ ] **权限策略**:MVP 全部 allow(`acceptEdits`);v0.2 加 `--allowed-tools` 白名单 + per-tool 用户确认 hook
+- [ ] 主进程关 workspace 时:停 MCP server 相关 binding(避免野进程读资源)
+
+### 验收(6j 部分)
+- [ ] CC subprocess 启动后能 list 所有 silent_agent 提供的 tool
+- [ ] 在主 chat 里说"看一下 logservice 这个 tab 当前页面" → CC 调 `browser.extract_text` 返回内容
+- [ ] 在主 chat 里说"帮我跑一下 git status" → CC 调 `terminal.run` 返回输出
+- [ ] 在主 chat 里说"看一下我最近改了啥" → CC 调 `workspace.log` 返回 commit 列表
+- [ ] 在主 chat 里说"分析一下我最近活动" → CC 调 `review.run` 拿到 markdown 建议(自己又触发一次 CC -p)
 
 ### Renderer
 - [ ] `useChat(workspaceId)` hook 订阅 stream

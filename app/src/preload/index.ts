@@ -5,7 +5,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
-import { IPC, ptyChannel } from '../shared/ipc'
+import { IPC, ptyChannel, chatChannel } from '../shared/ipc'
 import type {
   AgentMeta,
   ChatMessage,
@@ -87,6 +87,35 @@ const api = {
   review: {
     run: (workspaceId: string) =>
       ipcRenderer.invoke(IPC.REVIEW_RUN, workspaceId) as Promise<ReviewResult>,
+  },
+
+  // Chat: 每个 workspace 一个长驻 `claude --continue` pty,作为该 workspace 的主 agent。
+  // SilentChat 问答区直连;review 的"在主 agent 中继续"通过 chat.inject 喂消息。
+  chat: {
+    spawn: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.CHAT_SPAWN, workspaceId) as Promise<string>,
+    write: (workspaceId: string, data: string) =>
+      ipcRenderer.invoke(IPC.CHAT_WRITE, { workspaceId, data }) as Promise<boolean>,
+    resize: (workspaceId: string, cols: number, rows: number) =>
+      ipcRenderer.invoke(IPC.CHAT_RESIZE, { workspaceId, cols, rows }) as Promise<void>,
+    getBuffer: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.CHAT_GET_BUFFER, workspaceId) as Promise<string>,
+    inject: (workspaceId: string, text: string) =>
+      ipcRenderer.invoke(IPC.CHAT_INJECT, { workspaceId, text }) as Promise<boolean>,
+    kill: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.CHAT_KILL, workspaceId) as Promise<void>,
+    onData: (workspaceId: string, handler: (data: string) => void) => {
+      const channel = chatChannel.data(workspaceId)
+      const listener = (_e: unknown, data: string) => handler(data)
+      ipcRenderer.on(channel, listener)
+      return () => ipcRenderer.off(channel, listener)
+    },
+    onExit: (workspaceId: string, handler: (exitCode: number) => void) => {
+      const channel = chatChannel.exit(workspaceId)
+      const listener = (_e: unknown, code: number) => handler(code)
+      ipcRenderer.on(channel, listener)
+      return () => ipcRenderer.off(channel, listener)
+    },
   },
 
   // 终端相关: renderer ↔ main pty

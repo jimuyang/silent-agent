@@ -12,6 +12,8 @@ import { WorkspaceService } from './agent/workspace'
 import { registerAllIpc } from './ipc'
 import { TabManager } from './tabs/manager'
 import { registerTabManager, unregisterTabManager } from './ipc/tab'
+import { ChatManager } from './chat/manager'
+import { registerChatManager, unregisterChatManager } from './ipc/chat'
 
 /**
  * 只建 window,不立即 load renderer —— 给调用方留出时间注册 TabManager 等窗口级资源,
@@ -78,7 +80,12 @@ app.whenReady().then(async () => {
 
   const tabManager = new TabManager(win, storage, () => defaultAgent.id)
   registerTabManager(win.id, tabManager)
-  win.on('closed', () => unregisterTabManager(win.id))
+  const chatManager = new ChatManager(win, storage, () => defaultAgent.id)
+  registerChatManager(win.id, chatManager)
+  win.on('closed', () => {
+    unregisterTabManager(win.id)
+    unregisterChatManager(win.id)
+  })
 
   // 所有窗口级资源就位,再 load renderer
   loadRenderer(win)
@@ -89,7 +96,12 @@ app.whenReady().then(async () => {
       const w = createWindow()
       const tm = new TabManager(w, storage, () => defaultAgent.id)
       registerTabManager(w.id, tm)
-      w.on('closed', () => unregisterTabManager(w.id))
+      const cm = new ChatManager(w, storage, () => defaultAgent.id)
+      registerChatManager(w.id, cm)
+      w.on('closed', () => {
+        unregisterTabManager(w.id)
+        unregisterChatManager(w.id)
+      })
       loadRenderer(w)
     }
   })

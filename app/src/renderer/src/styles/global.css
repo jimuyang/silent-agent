@@ -790,7 +790,36 @@ code, .mono {
   cursor: pointer;
   transition: opacity 0.15s;
 }
-.continue-btn:hover { opacity: 0.85; }
+.continue-btn:hover:not(:disabled) { opacity: 0.85; }
+.continue-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  background: var(--panel-2);
+  color: var(--text-dim);
+}
+.injected-mark {
+  color: #51c074;
+  margin-left: 8px;
+}
+
+/* Chat section in SilentChat panel:problem 区域之下,让 ChatTerminal 撑满 */
+.chat-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.chat-terminal-host {
+  flex: 1;
+  min-height: 0;
+  background: #0a0b0f;
+  padding: 6px 8px;
+  overflow: hidden;
+}
+.chat-terminal-host .xterm,
+.chat-terminal-host .xterm-viewport,
+.chat-terminal-host .xterm-screen {
+  height: 100% !important;
+}
 
 .chat {
   flex: 1;

@@ -43,12 +43,27 @@ export const IPC = {
 
   // review (MVP: spawn `claude -p` 在 workspace 跑 review)
   REVIEW_RUN: 'review.run',
+
+  // chat (MVP: 每个 workspace 嵌一个长驻 `claude --continue`,作为该工作区的主 agent 入口,
+  // 在 SilentChat 问答区直连;review 的"在主 agent 中继续"通过 chat.inject 喂消息进来)
+  CHAT_SPAWN: 'chat.spawn',
+  CHAT_KILL: 'chat.kill',
+  CHAT_WRITE: 'chat.write',
+  CHAT_RESIZE: 'chat.resize',
+  CHAT_GET_BUFFER: 'chat.getBuffer',
+  CHAT_INJECT: 'chat.inject',
 } as const
 
 // 动态 event channel:main → renderer 每个终端的数据流
 export const ptyChannel = {
   data: (tabId: string) => `pty.data.${tabId}` as const,
   exit: (tabId: string) => `pty.exit.${tabId}` as const,
+}
+
+// chat(per-workspace claude pty)的事件信道,按 workspaceId 拼
+export const chatChannel = {
+  data: (workspaceId: string) => `chat.data.${workspaceId}` as const,
+  exit: (workspaceId: string) => `chat.exit.${workspaceId}` as const,
 }
 
 export type IpcChannel = typeof IPC[keyof typeof IPC]

@@ -1,24 +1,27 @@
 import { useState } from 'react'
-import type { ReviewResult, TabMeta } from '@shared/types'
+import type { ReviewResult } from '@shared/types'
 import { ipc } from '../lib/ipc'
+import ChatTerminal from './ChatTerminal'
 
 interface SilentChatProps {
   workspaceId: string
-  /** 由 App 传入,共享同一个 useTabs instance(否则 tab bar 不刷新) */
-  openTerminal: (cwd?: string, command?: { file: string; args: string[] }) => Promise<TabMeta>
 }
 
-// Silent Chat = 一种特殊 tab 的内容视图。全宽占用 pane,不再是右侧栏。
-// MVP:Review 按钮 → spawn `claude -p` 跑 review,卡片显示建议;
-// "在终端继续" → 开 terminal tab `claude --resume <session>` 续接同一会话。
-export default function SilentChat({ workspaceId, openTerminal }: SilentChatProps) {
-  const [draft, setDraft] = useState('')
+// SilentChat panel:
+// - 上半 🔔 Push:[Review] 按钮 + 建议卡片
+// - 下半 💬 问答:嵌入式 ChatTerminal(每个 workspace 一个长驻 `claude --continue`)
+//
+// review 完成后点"在主 agent 中继续" → 把建议文本 inject 进 ChatTerminal 的 pty,
+// CC 把它当一条 user message 处理。
+export default function SilentChat({ workspaceId }: SilentChatProps) {
   const [reviewing, setReviewing] = useState(false)
   const [result, setResult] = useState<ReviewResult | null>(null)
+  const [injected, setInjected] = useState(false)
 
   async function runReview() {
     setReviewing(true)
     setResult(null)
+    setInjected(false)
     try {
       const r = await ipc.review.run(workspaceId)
       setResult(r)
@@ -29,21 +32,17 @@ export default function SilentChat({ workspaceId, openTerminal }: SilentChatProp
     }
   }
 
-  async function continueInTerminal() {
-    console.log('[SilentChat] continueInTerminal click', { sessionId: result?.sessionId })
-    if (!result?.sessionId) {
-      console.warn('[SilentChat] no session id, cannot continue')
-      return
-    }
+  async function injectIntoChat() {
+    if (!result?.ok || !result.suggestion) return
+    const payload =
+      `[Review 给的建议]\n${result.suggestion}\n\n` +
+      `请帮我把这个 pattern 沉淀成 skill,跟我对话确认细节(背景 / 步骤 / 成功标准)。`
     try {
-      const tab = await openTerminal(undefined, {
-        file: 'claude',
-        args: ['--resume', result.sessionId, '--permission-mode', 'acceptEdits'],
-      })
-      console.log('[SilentChat] terminal tab opened', tab)
+      await ipc.chat.inject(workspaceId, payload)
+      setInjected(true)
     } catch (e) {
-      console.error('[SilentChat] openTerminal failed', e)
-      alert(`开终端失败:${(e as Error).message}`)
+      console.error('[SilentChat] inject failed', e)
+      alert(`inject 失败:${(e as Error).message}`)
     }
   }
 
@@ -59,7 +58,7 @@ export default function SilentChat({ workspaceId, openTerminal }: SilentChatProp
             className="review-btn"
             onClick={runReview}
             disabled={reviewing}
-            title="让 Claude Code 看 events.jsonl + git log,找重复 pattern,建议可以自动化的事"
+            title="让 Claude Code 看 events.jsonl + git log,找重复 pattern"
           >
             {reviewing ? '⏳' : '🔍'} Review
           </button>
@@ -69,8 +68,8 @@ export default function SilentChat({ workspaceId, openTerminal }: SilentChatProp
           {!result && !reviewing && (
             <div className="push-card observing">
               <span className="live-dot" style={{ display: 'inline-block', marginRight: 6 }} />
-              正在记录当前工作区的浏览器 + 接口行为
-              <div className="meta">.silent/events.jsonl · 点 Review 让 Claude Code 看一下</div>
+              下方就是该 workspace 的主 agent(Claude Code),直接问;或点 Review 让它自己看一下
+              <div className="meta">.silent/events.jsonl · 主 agent: claude --continue</div>
             </div>
           )}
 
@@ -96,10 +95,17 @@ export default function SilentChat({ workspaceId, openTerminal }: SilentChatProp
               </div>
               <div className="review-meta">
                 <span className="meta">
-                  session: {result.sessionId?.slice(0, 8)} · {((result.durationMs ?? 0) / 1000).toFixed(1)}s
+                  session: {result.sessionId?.slice(0, 8)} ·{' '}
+                  {((result.durationMs ?? 0) / 1000).toFixed(1)}s
+                  {injected && <span className="injected-mark"> · 已喂给主 agent ✓</span>}
                 </span>
-                <button className="continue-btn" onClick={continueInTerminal}>
-                  💬 在终端继续聊
+                <button
+                  className="continue-btn"
+                  onClick={injectIntoChat}
+                  disabled={injected}
+                  title="把这段建议作为一条消息发给下方主 agent,跟它对话沉淀 skill"
+                >
+                  {injected ? '✓ 已发送' : '💬 发给主 agent 继续聊'}
                 </button>
               </div>
             </div>
@@ -107,35 +113,12 @@ export default function SilentChat({ workspaceId, openTerminal }: SilentChatProp
         </div>
       </div>
 
-      <div className="silent-section flex">
+      <div className="silent-section flex chat-section">
         <div className="ss-head">
-          💬 问答
+          💬 问答(主 agent · Claude Code)
           <span className="rs-count">#{workspaceId}</span>
         </div>
-
-        <div className="chat">
-          <div className="msg agent">
-            <div className="msg-role">Agent</div>
-            <div className="msg-body">
-              MVP 阶段:这里的 chat 暂不接 Claude API。直接用上面的 <strong>Review</strong> 按钮 →
-              点"在终端继续聊"开一个 terminal tab,在里面跟 Claude Code 对话。续接同一 session,
-              可以直接让它沉淀 skill。
-            </div>
-          </div>
-        </div>
-
-        <div className="chat-input">
-          <div className="chat-input-box">
-            <textarea
-              placeholder="(MVP 期暂未启用,用 Review → 在终端继续)"
-              rows={1}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              disabled
-            />
-            <button className="send" disabled>↑</button>
-          </div>
-        </div>
+        <ChatTerminal workspaceId={workspaceId} />
       </div>
     </div>
   )

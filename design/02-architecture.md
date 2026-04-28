@@ -182,7 +182,7 @@ git commit                   ← "这个时刻的 snapshot"
 
 | type | `path` | 产物内部 | 谁产生 |
 |---|---|---|---|
-| `silent-chat` | `messages.jsonl` | 一个文件(append-only) | harness 对话 |
+| `silent-chat` | `main_chat.jsonl` | append-only 流(不进 git) | main_chat agent 与用户对话 |
 | `browser` | `tabs/<tid>/` | `snapshots/NNN.md` + `latest` symlink | `did-finish-load` 后抽 readability |
 | `terminal` | `tabs/<tid>/` | `buffer.log`(append) + `snapshots/NNN.log`(命令边界) | `pty.onData` + preexec/exit |
 | `file` (内部) | `workspaces/<wid>/<path>` | 文件本身 | 用户 save |
@@ -237,14 +237,139 @@ MVP 主区有两种显示模式:
 
 每个 workspace 目录自动 `git init`,作为独立 repo。**Workspace 版本 = git commit SHA**。
 
-**应用内事件**(chat / browser / terminal / tab 生命周期)由 app 内 module 主动 emit 进 `<workspace>/.silent/events.jsonl`(append-only,**进 git**)。**不监听用户外部 fs 编辑** —— 用户 vim :w 之后没有事件,但下一次 emit 触发 commit 时 `git status` 会自然把变化捡进版本。
-
 `WorkspaceVCS` 是 workspace 同级暴露的能力对象,提供 `emit / commit / log / diff / show / status / branch / checkout`。Auto-commit 4 条 Tier 1 规则在边界事件(turn-end / load-finish / shell.exit / idle 30s)触发。完整设计见 **[08-vcs.md](08-vcs.md)**。
 
-**linkedFolder(嵌套 repo)处理** — 只记 ref,不复制内容:
+#### `.silent/` 二分:`<workspace>/.silent/` 顶层(git)+ `.silent/runtime/` 子目录(.gitignore)
+
+`<workspace>/` 内文件按"是否需要内容版本化"二分,**git 边界 = `.silent/runtime/` 子目录边界**:
+
+| 位置 | 进 git? | 内容 |
+|---|---|---|
+| `用户文件 / src / 任意用户产物` | ✅ | 用户的工作内容 |
+| `.silent/meta.yaml` | ✅ | workspace 配置(name / linkedFolder),低频 |
+| `.silent/tabs/<tid>/latest.md` | ✅ | browser tab 当前页面(Defuddle 抽出),`load-finish` 时整体 cp |
+| `.silent/tabs/<tid>/latest-cmd.log` | ✅ | terminal tab 最近一次命令完整输出,`shell.exit` 时整体 cp |
+| `agents/<aid>/skills/*.yaml` | ✅ | skill 定义(用户/agent 沉淀的资产) |
+| **`.silent/runtime/`** ↓ | ❌ `.gitignore`(整个子目录) | runtime / logs / cache 全部 |
+| `.silent/runtime/events.jsonl` | ❌ | workspace 时序日志(2 层结构,Layer 1) |
+| `.silent/runtime/main_chat.jsonl` | ❌ | main_chat agent 对话流 |
+| `.silent/runtime/main_review.jsonl` | ❌ | main_review agent 对话流 |
+| `.silent/runtime/tabs.json` | ❌ | tab 索引(UI 状态,disk 当前态恢复) |
+| `.silent/runtime/tabs/<tid>/snapshots/NNN-*.{md,log}` | ❌ | 历史快照序列(序列本身已是 log) |
+| `.silent/runtime/tabs/<tid>/buffer.log` | ❌ | pty raw 流(信息冗余在 NNN-cmd.log) |
+| `.silent/runtime/state/{cookies,cache,last-active.json,...}` | ❌ | runtime cache / 隐私 |
+
+**核心约定**:**git 只管"workspace 当前真状态"** —— 用户内容 + 配置 + 每个 tab 的 latest 当前态。**所有时序 / 历史 / 派生品全部进 `.silent/runtime/`**。
+
+`.gitignore` 简化到一行:
+```gitignore
+.silent/runtime/
+```
+
+**为什么 runtime 不进 git**:
+1. **append-only 流(events / main_chat / main_review)** —— 本身已是 monotonic truth,git pack 不会比 cat 文件便宜;任意时刻 `head -n <line>` 取那一刻状态
+2. **历史 NNN 切片(snapshots/)** —— 序列由 NNN 排序就是 log,不需要 git 加额外时间维度
+3. **buffer.log / cache** —— 高频 / 派生 / 可重建
+4. **tabs.json** —— UI 状态,从 disk 当前态恢复就够;改动太频繁(focus/url 变),git 永远 dirty
+
+时点查询 = `git checkout <sha>`(产物)+ `cat .silent/runtime/events.jsonl | jq 'select(.ts < t)'`(timeline)。两轴独立,不串扰。
+
+#### Events 2 层结构(强约定)
+
+每条 events.jsonl 行 = **Layer 1 简要事件** + 可选 detail 引用(指向 Layer 2 详情)。
+
+```typescript
+interface WorkspaceEvent {
+  ts: string
+  source: 'tab' | 'browser' | 'shell' | 'file' | 'chat' | 'agent' | 'review' | 'user' | 'workspace' | 'linked'
+  action: string
+  tabId?: string
+  target?: string                              // 主对象(URL / cmd / path)
+  meta?: {
+    summary?: string                           // Layer 1:一行 LLM-readable 简介,< 200 字符
+    detailPath?: string                        // Layer 2 引用:immutable 文件(snapshot / suggestion / skill)
+    messageId?: string                         // Layer 2 引用:append stream 中的单条(main_chat.jsonl / main_review.jsonl)
+    [key: string]: unknown                     // 其他短结构化字段(exitCode / status / count)
+  }
+}
+```
+
+**Layer 2 detail 按 source 形态选引用方式**:
+
+| 形态 | 引用字段 | 例子 |
+|---|---|---|
+| immutable 文件 / 文件序列 | `meta.detailPath` | `browser.load-finish` → `tabs/br-1/snapshots/003-*.md` |
+| append stream 中的单条 | `meta.messageId` | `chat.tool-use` → `main_chat.jsonl` / `review.surfaced` → `main_review.jsonl`(同构) |
+| 用户文件(git 自管) | `target` 已是路径 | `file.save → notes.md`,无需 detail |
+
+**约束**:
+- 每行 events.jsonl 严格 < 1KB(timeline scan 友好,LLM token 经济)
+- `summary` 必填(timeline 自包含可读)
+- `detailPath` 与 `messageId` 互斥(一个事件最多一种 detail 引用)
+- 长内容(快照原文 / 对话内容 / suggestion markdown)**只能放 Layer 2 文件**,不能进 jsonl meta
+
+**好处**:LLM scan timeline 只读 summary 即可,要细节按需 fetch;隐私分级天然(Layer 1 元数据 vs Layer 2 内容);git 摆放(detail 进 git,timeline 不进)清爽。
+
+#### linkedFolder(嵌套 repo)处理 — 只记 ref,不复制内容
+
 - `.gitignore` 包含 linkedFolder 路径
-- `events.jsonl` 记 `{source:'linked', action:'probe', meta:{head:<sha>, dirty:bool}}`
+- `events.jsonl` 记 `{source:'linked', action:'probe', meta:{summary, head:<sha>, dirty:bool}}`
 - linkedFolder 内容演进由它自己的 git 管
+
+### 每 workspace 两个 agent · main_chat 与 main_review
+
+每个 workspace 同时有两个 LLM agent 角色,各自有独立 append stream:
+
+| Agent | 落盘文件(`.silent/`,**不进 git**) | 触发 | session 持久化 |
+|---|---|---|---|
+| **main_chat** | `main_chat.jsonl` | 用户主动输入(SilentChat 问答区) | ✅ workspace 重开续接(v0.2 实装,MVP 暂每次新会话) |
+| **main_review** | `main_review.jsonl` | 系统调用(idle / 手动 Review / 凌晨) | ❌ 用完即弃,每次 fresh session |
+
+`main_chat.jsonl` 取代了原 `messages.jsonl`(rename 时机:Phase 5 合并)。
+
+#### main_chat 是 workspace 主权 agent(架构层重要约定)
+
+main_chat 不只是"chat panel 后端",它是**该 workspace 的主权 agent**,可调度该 workspace 内**所有资源**:
+
+```mermaid
+flowchart LR
+    User[用户]
+    MainChat[main_chat agent]
+    subgraph WS["Workspace 内资源"]
+        BR[所有 browser tab]
+        TM[所有 terminal tab]
+        FL[文件 / 用户内容]
+        VCS[WorkspaceVCS<br/>commit/log/diff]
+        REVIEW[main_review<br/>主动调起]
+    end
+
+    User <--> MainChat
+    MainChat -->|tool: browser.*| BR
+    MainChat -->|tool: terminal.*| TM
+    MainChat -->|tool: file.*| FL
+    MainChat -->|tool: vcs.*| VCS
+    MainChat -->|tool: review.run| REVIEW
+
+    style MainChat fill:#3a5c1a,color:#fff
+    style WS fill:#1a3a5c,color:#fff
+```
+
+**未来 main_chat 可暴露的 tool 集**(Phase 6+ 增量实装):
+
+| Tool 类 | 例子 | Phase |
+|---|---|---|
+| `browser.*` | navigate / extractText / click / waitForLoad / screenshot | 6 起手 / v0.2 完整 49 verb |
+| `terminal.*` | run / sendKeys / readBuffer / waitForPrompt | 6 起手 |
+| `file.*` | read / write / list / pickOpen | 6 起手(已有 IPC 复用) |
+| `vcs.*`(workspace 版本能力) | log / diff / show / status / commit / branch | 6+ |
+| `review.run` | 主动触发 review | 7 |
+| `tab.*` | open / close / focus | 6 |
+
+**意义**:用户跟 main_chat 一个对话,就能让它代为操作整个工作区 —— 看页面、跑命令、改文件、读历史、commit、调起 review、写 skill。**main_chat 是用户在 workspace 里的"放大器"**。
+
+跟其他工作区 agent 的区别:
+- review agent:只读探索 + 单次产出 suggestion,系统调用,不持有用户对话上下文
+- 未来可能加的 background agent / domain agent:特定任务,不抢 main_chat 的主权
 
 ### Agent 运行时 → 详见 [03-agent-core.md](03-agent-core.md)
 
@@ -259,7 +384,7 @@ LLM 对话运行时抽出独立包 **`@silent/agent-core`**,Node-only / 零 Elec
 
 `runSession(agent, session, sandbox, *, llm, hooks)` 是核心 loop 函数(不是类),4 路退出 → `end_turn` / `requires_action` / `retries_exhausted` / `terminated`,跟 Anthropic Managed Agent 同构。
 
-**app 端 Workspace 双面 adapter**:同一个工作区目录给 agent-core 当 Session(读 messages.jsonl)+ Sandbox(读写文件 / 跑命令)。Memory 通过 `onSessionStart` / `onSessionEnd` hook 推到 harness 外,由 app 层管。
+**app 端 Workspace 双面 adapter**:同一个工作区目录给 agent-core 当 Session(读 `main_chat.jsonl`)+ Sandbox(读写文件 / 跑命令)。Memory 通过 `onSessionStart` / `onSessionEnd` hook 推到 harness 外,由 app 层管。
 
 完整设计(`AgentConfig` 版本化、`runSession` 主循环、`SessionHooks` Memory 切口、Provider 矩阵 / Prefix cache 策略 / Skill 集成 / monorepo 包结构 / Phase 6 子任务)见 **[03-agent-core.md](03-agent-core.md)**。
 
@@ -288,7 +413,7 @@ interface ExecContext {
 
 > **核心约定**:工作区身份由 **`.silent/`** 目录决定(类比 `.git/`)。任何文件夹 `<X>` 加上 `<X>/.silent/` 就是一个 Silent Agent 工作区。Agent 默认在 `~/.silent-agent/agents/<aid>/workspaces/<wid>/` 下建,也可通过 `addWorkspace(absPath)` 把任意已有目录注册为 workspace,只要在该目录写 `.silent/` 并把绝对路径登记进 agent 的 `_index.json`。
 
-**身份目录命名集中在 `app/src/shared/consts.ts`**(`SILENT_DIR / FILES.* / SUBDIRS.* / SILENT_CHAT_TAB_PATH / tabRelPath()`),不要把 `'.silent'` / `'messages.jsonl'` 这类字符串散落到各处。
+**身份目录命名集中在 `app/src/shared/consts.ts`**(`SILENT_DIR / FILES.* / SUBDIRS.* / SILENT_CHAT_TAB_PATH / tabRelPath()`),不要把 `'.silent'` / `'main_chat.jsonl'` / `'events.jsonl'` 这类字符串散落到各处。
 
 ```
 ~/.silent-agent/
@@ -315,16 +440,23 @@ interface ExecContext {
 │           └── <workspace-id>/         # ★ 一个工作区目录(同时也是 git repo)
 │               ├── .git/               # auto-init(Phase 5f)
 │               ├── .gitignore
-│               ├── .silent/            # ★ 工作区标识 + 内部产物全在这下面
-│               │   ├── meta.yaml       # name / linkedFolder?
-│               │   ├── messages.jsonl  # silent-chat tab 的产物
-│               │   ├── events.jsonl    # workspace 级单一时间线
-│               │   ├── tabs.json       # tab index: [{id, type, path, state}]
-│               │   ├── tabs/<tid>/     # 每个 tab 的产物
-│               │   │   ├── snapshots/NNN-<ts>.{md|log}
-│               │   │   └── buffer.log  # terminal append-only
-│               │   └── state/          # 其他运行时状态
-│               └── (用户放的任何文件)  # 如 notes.md / data.csv
+│               ├── .silent/                                ★ workspace 标识
+│               │   ├── meta.yaml                           ✅ git: 配置
+│               │   ├── tabs/
+│               │   │   └── <tid>/
+│               │   │       ├── latest.md                   ✅ git: browser 当前页面
+│               │   │       └── latest-cmd.log              ✅ git: terminal 最近命令输出
+│               │   └── runtime/                            ❌ .gitignore 整个子目录
+│               │       ├── events.jsonl                    timeline log (2 层 schema, Layer 1)
+│               │       ├── main_chat.jsonl                 main_chat agent 对话流
+│               │       ├── main_review.jsonl               review agent 对话流
+│               │       ├── tabs.json                       UI 状态(从 disk 当前态恢复)
+│               │       ├── tabs/
+│               │       │   └── <tid>/
+│               │       │       ├── snapshots/NNN-<ts>.{md|log}  immutable 历史切片
+│               │       │       └── buffer.log              pty raw 流
+│               │       └── state/{last-active.json, cookies/, cache/}
+│               └── (用户放的任何文件)                       ✅ git: notes.md / data.csv / src/
 │
 └── logs/app.log
 ```
@@ -336,7 +468,7 @@ interface ExecContext {
 ├── src/, package.json, ...             # 用户原有
 └── .silent/                            # ★ Silent Agent 写入的标识 + 产物
     ├── meta.yaml
-    ├── messages.jsonl
+    ├── main_chat.jsonl
     └── ...                             # 同上
 ```
 - `addWorkspace(agentId, absPath, name?)` 在 `absPath/.silent/` 下创建标识 + 初始化产物
@@ -349,10 +481,11 @@ interface ExecContext {
 - `.gitignore` 不复制其内容,events.jsonl 定期 probe 记 HEAD SHA + dirty 状态
 
 - **JSONL 是真相源**,SQLite/index 只做缓存,删了能从 JSONL 重建
-- **一 workspace 一 git repo**:删 = `rm -rf`,分享 = `git bundle` 或 tar 整目录
+- **一 workspace 一 git repo**:删 = `rm -rf`,分享 = tar 整目录(jsonl logs 不在 git 里 → `git bundle` 不够,需整目录复制)
 - **原子写**:yaml/json 整文件写 `.tmp` + rename(POSIX 原子);jsonl 追加 + fsync
 - **List 优化**:`_index.json` 作为目录扫描 cache,启动时读,不命中再重建
-- **events.jsonl 高频 append**,git 不 commit 每一次;commit 在逻辑边界(Layer 1 规则 / Layer 2 agent 决策)
+- **events / main_chat / main_review jsonl 不进 git** —— logs 是时序 truth,git 只管内容版本;两条独立时间轴互不干扰
+- **commit 在逻辑边界**(Tier 1 规则触发);若 git status 空(纯 chat turn 无产物变化)→ skip empty commit,events.jsonl 仍记录 timeline
 
 ### StorageAdapter 接口(一等抽象)
 
@@ -523,8 +656,8 @@ window.api = {
 - Phase 2 ✅ Tab 管理框架 + 浏览器 tab(WebContentsView)
 - Phase 3 ✅ 终端 tab(xterm + node-pty)
 - Phase 4 ✅ 文件 tab(Monaco editor)
-- Phase 5 🔄 Workspace 化(`.silent/`)+ events.jsonl + Layer 1 git auto-commit
-- Phase 6 — Chat:Sandbox + Harness 接口 + `ClaudeAgentSdkHarness`(走 Claude 订阅,自管 messages.jsonl + cache_control)+ 知识库 tool
+- Phase 5 🔄 Workspace 化(`.silent/`)+ events.jsonl(2 层 schema)+ main_chat.jsonl / main_review.jsonl + Tier 1 git auto-commit
+- Phase 6 — Chat:Sandbox + Harness 接口 + `ClaudeAgentSdkHarness`(走 Claude 订阅,自管 main_chat.jsonl + cache_control)+ 知识库 tool + main_chat 主权 tool 集
 - Phase 7 — 教教我仪式 + skill v1 教学执行
 - Phase 8 — Dogfood(1 周)
 

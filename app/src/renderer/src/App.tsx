@@ -116,7 +116,6 @@ export default function App() {
             <ActiveTabPane
               activeTab={activeTab}
               activeWorkspaceId={activeWorkspaceId}
-              openTerminal={openTerminal}
             />
           </div>
         </main>
@@ -135,17 +134,15 @@ export default function App() {
 function ActiveTabPane({
   activeTab,
   activeWorkspaceId,
-  openTerminal,
 }: {
   activeTab: ReturnType<typeof useTabs>['activeTab']
   activeWorkspaceId: string | null
-  openTerminal: ReturnType<typeof useTabs>['openTerminal']
 }) {
   const workspaceId = activeWorkspaceId ?? 'no-workspace'
 
   // A 模式: Silent Chat 独占
   if (!activeTab || activeTab.type === 'silent-chat') {
-    return <SilentChat workspaceId={workspaceId} openTerminal={openTerminal} />
+    return <SilentChat workspaceId={workspaceId} />
   }
 
   // B 模式: 左工作 tab + 右 Silent Chat 分栏
@@ -156,7 +153,7 @@ function ActiveTabPane({
       </div>
       <div className="split-divider" />
       <div className="split-right">
-        <SilentChat workspaceId={workspaceId} openTerminal={openTerminal} />
+        <SilentChat workspaceId={workspaceId} />
       </div>
     </div>
   )
