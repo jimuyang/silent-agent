@@ -1,10 +1,12 @@
 # Silent Agent — 任务清单
 
 > 按 Phase 切,每个 Phase 落一个可独立 dogfood 的里程碑。
-> 状态: `[x]` 完成 · `[ ]` 待做 · `[~]` 进行中 · `[!]` 阻塞
+> 状态:`[x]` 完成 · `[ ]` 待做 · `[~]` 进行中 · `[!]` 阻塞
 >
 > 核心重排:**Tab 基础设施先做,AI 后置**。先把"轻 IDE 壳"跑通 dogfood 工作区形态,再上 agent。
 > 数据模型按多 agent 设计,MVP 单 window 单 default agent。
+>
+> 设计真相源:[`design/_Index.md`](design/_Index.md);代码锚 [`design/02-architecture.md`](design/02-architecture.md),Phase 5 实施依据 [`design/08-vcs.md`](design/08-vcs.md),Phase 6 实施依据 [`design/03-agent-core.md`](design/03-agent-core.md)。
 
 ---
 
@@ -12,8 +14,8 @@
 
 产出:可运行的 Electron 壳 + 三栏布局 + IPC 通路。
 
-- [x] 10 份设计文档对齐到 v3 产物视角
-- [x] `design/architecture.md` — 五层 + 多 agent 模型(Agent / Session / Connection / Capability / Attachment)
+- [x] 设计文档归并完成(8 篇核心 + archive 历史 + `_Index.md` 索引)
+- [x] `design/02-architecture.md` — 五层 + 多 agent 模型(Agent / Workspace / Connection / Capability / Attachment)
 - [x] 技术栈:Electron 38 + React 19 + Vite + TS 5
 - [x] electron-vite 项目脚手架 + 三套 tsconfig
 - [x] 三进程模型(main / preload / renderer)
@@ -25,305 +27,322 @@
 
 ---
 
-## Phase 1 — 存储层 + Agent/Session CRUD (半天) ✅
+## Phase 1 — 存储层 + Agent/Workspace CRUD ✅
 
-让 agent / session / tab / message / observation 都有落盘能力,左栏真从磁盘读。
+让 agent / workspace / tab / message 都有落盘能力,左栏真从磁盘读。
 
 ### 路径与工具
-- [ ] `src/main/storage/paths.ts` — `~/.silent-agent/` 下所有路径,入口带 `agentId`
-- [ ] `src/main/storage/jsonl.ts` — append / 流式读取 / 逐行解析
-- [ ] `src/main/storage/yaml.ts` — `readYaml` / `writeYamlAtomic`(tmp + rename)
-- [ ] `src/main/storage/index.ts` — `_index.json` 读写+重建
+- [x] `src/main/storage/paths.ts` — `~/.silent-agent/` 下所有路径
+- [x] `src/main/storage/jsonl.ts` — append / 流式读取 / 逐行解析
+- [x] `src/main/storage/yaml.ts` — `readYaml` / `writeYamlAtomic`(tmp + rename)+ `readJson` / `writeJsonAtomic`
 
 ### StorageAdapter 接口
-- [ ] `src/main/storage/adapter.ts` — `interface StorageAdapter`(完整签名见 architecture.md)
-- [ ] `src/main/storage/local-fs.ts` — `LocalFsAdapter` 实现
-- [ ] **不 import 'electron'**,纯 Node 代码
+- [x] `src/main/storage/adapter.ts` — `interface StorageAdapter`
+- [x] `src/main/storage/local-fs.ts` — `LocalFsAdapter` 实现,**不 import 'electron'**
+- [x] `_index.json` 格式从 `{ ids: [] }` 演化到 `{ entries: [{id, path?}] }`,自动迁移
 
 ### Agent 模型
-- [ ] `src/main/agent/registry.ts` — `listAgents / getAgent / createAgent / ensureDefault`
-- [ ] 启动时 `ensureDefault()`:若 `agents/silent-default/` 不存在则自动创建
-- [ ] `src/shared/types.ts` 加 `AgentMeta` 类型
+- [x] `src/main/agent/registry.ts` — `list / get / ensureDefault`
+- [x] 启动时 `ensureDefaultAgent()`:若 `agents/silent-default/` 不存在则自动创建
+- [x] `src/shared/types.ts` 定义 `AgentMeta`
 
-### Session 模型
-- [ ] `src/main/agent/session.ts` — `listSessions(agentId) / createSession / loadMessages / rename / delete`
-- [ ] id 生成:`${YYMMDD}-${shortHash}-${slug?}`(如 `260423-a1b2-logid`)
-- [ ] 启动时若 default agent 下无 session,建 `#welcome` chat session
+### Workspace 模型
+- [x] `src/main/agent/workspace.ts` — `list / get / create / addWorkspace / rename / delete / loadMessages / appendMessage`
+- [x] id 生成:`${YYMMDD}-${shortHash}-${slug}`(如 `260423-a1b2-logid`)
+- [x] 启动 guard `ensureHasWorkspace`:default agent 下若无 workspace,建 "欢迎" workspace
+- [x] **任意目录 + `.silent/` 即工作区**(类比 `.git/`)
+- [x] `addWorkspace(absPath)` —— 把任意已有目录注册为外挂 workspace,只在该目录写 `.silent/`
 
 ### IPC 层
-- [ ] `src/main/ipc/agent.ts` — `agent.current` / `agent.list`
-- [ ] `src/main/ipc/session.ts` — `session.list` / `session.create` / `session.rename` / `session.delete` / `session.loadMessages`
-- [ ] IPC handler 内部从 `BrowserWindow.fromWebContents(event.sender)` 取 `agentId`(MVP 单 window,直接 default)
-- [ ] preload 暴露对应方法到 `window.api.agent.*` / `window.api.session.*`
-- [ ] `src/shared/ipc.ts` — 集中定义 IPC channel name 常量(两端共用)
+- [x] `src/main/ipc/agent.ts` — `agent.current` / `agent.list`
+- [x] `src/main/ipc/workspace.ts` — `workspace.list / create / add / rename / delete / loadMessages`
+- [x] `src/main/ipc/context.ts` — IPC handler 内部用 `BrowserWindow.fromWebContents(event.sender)` 取 `agentId`
+- [x] preload 暴露对应方法到 `window.api.*`
+- [x] `src/shared/ipc.ts` + `src/shared/consts.ts` — channel name + 路径常量集中
 
 ### Renderer
-- [ ] `src/renderer/src/hooks/useAgent.ts` — 订阅当前 agent
-- [ ] `src/renderer/src/hooks/useSessions.ts` — 订阅 session 列表
-- [ ] LeftNav 的 agent 展示区从硬编码切到 `useAgent()`
-- [ ] LeftNav 的 sessions 列表切到 `useSessions()`
-- [ ] 新建按钮接 `session.create`
-- [ ] 空态:无 session 时显示"无会话"(首次启动应该不会到,自动建了 welcome)
+- [x] `src/renderer/src/hooks/useAgent.ts` — 当前 agent
+- [x] `src/renderer/src/hooks/useWorkspaces.ts` — workspace 列表
+- [x] LeftNav 接 `useAgent` / `useWorkspaces`,新建按钮接 `workspace.create`
 
 ### 验收
-- [ ] `npm run dev` 启动,`~/.silent-agent/agents/silent-default/sessions/<welcome>/` 自动出现
-- [ ] 点 `＋` 新建 chat session,立刻显示在左栏;磁盘对应 `meta.yaml + messages.jsonl + context/ + state/`
-- [ ] 重启 app,session 列表保留
+- [x] `npm run dev` 启动 → `~/.silent-agent/agents/silent-default/workspaces/<wid>/` 自动出现
+- [x] 点 `＋` 新建 workspace,左栏立刻显示;磁盘对应 `.silent/{meta.yaml, messages.jsonl, tabs.json}`
+- [x] 重启 app,workspace 列表保留
 
 ---
 
-## Phase 2 — Tab 管理框架 + 浏览器 tab (2-3 天) ✅
+## Phase 2 — Tab 管理框架 + 浏览器 tab ✅
 
 点 `[+]` 真开 `WebContentsView` 导航到 URL,Silent Chat pinned 被挤压到右边。
 
 ### 数据模型
-- [ ] `src/shared/types.ts` 加 `Tab` 类型(discriminated union by `type`)
-- [ ] `Tab.state` 按 type 分:`BrowserTabState / TerminalTabState / FileTabState`
-- [ ] Tab 落盘到 `agents/<aid>/sessions/<sid>/state/tabs.json`(整文件重写)
+- [x] `TabMeta` 类型(discriminated union by `type`),`path` 提为一等字段
+- [x] `Tab.state` 按 type 分:`BrowserTabState / TerminalTabState / FileTabState`
+- [x] Tab 落盘 `<workspace>/.silent/tabs.json`(整文件重写,迁移规则在 `LocalFsAdapter.upgradePath`)
+- [x] `silent-chat` 为虚拟 pinned tab,`path = .silent/messages.jsonl`
 
-### Tab Manager (桥接层,import electron)
-- [ ] `src/main/tabs/manager.ts` — 每个 session 维护一份 tab 列表,应用启动按 `tabs.json` 恢复
-- [ ] `src/main/tabs/browser.ts` — 每个 browser tab 对应一个 `WebContentsView`
-- [ ] `view.setBounds(...)` 按 BrowserPane 的 DOM 位置贴;其他 tab 时 bounds 归零隐藏
-- [ ] Silent Chat tab 是虚拟 tab,不实际对应 WebContentsView(它就是 renderer 里的 React 组件)
+### Tab Manager
+- [x] `src/main/tabs/manager.ts` — 每个 workspace 维护 tab 列表,启动按 `tabs.json` 恢复
+- [x] `src/main/tabs/browser-tab.ts` — 每个 browser tab 一个 `WebContentsView`
+- [x] `setBounds(...)` 按 BrowserPane DOM 位置贴;非 active tab 隐到 OFFSCREEN
 
 ### IPC
-- [ ] `tab.list(sessionId)` → `TabMeta[]`
-- [ ] `tab.open(sessionId, { type: 'browser', url })` → `TabMeta`
-- [ ] `tab.close(tabId)`
-- [ ] `tab.focus(tabId)` — 负责切 view 可见性
-- [ ] `tab.setBounds(tabId, { x, y, w, h })` — renderer 告诉 main "浏览器 pane 的实际位置"
+- [x] `tab.list / tab.open / tab.close / tab.focus / tab.setBounds / tab.popupTypeMenu`(原生 OS 菜单)
 
 ### Renderer
-- [ ] `useTabs(sessionId)` hook
-- [ ] TabBar 接 `useTabs`,[+] 点击弹 prompt "输入 URL"(MVP 最简)
-- [ ] TabBar 渲染规则:`[+] | [browser...] [terminal...] [file...] | spacer | [Silent Chat pinned]`
-- [ ] 切 tab 时通过 `useResizeObserver` 监听 BrowserPane div 的位置 → `tab.setBounds`
-- [ ] 关 tab (`×`) 接 `tab.close`
+- [x] `useTabs(workspaceId)` hook
+- [x] TabBar 渲染 `[📁] [+] [tabs...] [Silent Chat pinned]`
+- [x] 切 tab 时 `useResizeObserver` → `tab.setBounds`
 
 ### 验收
-- [ ] [+] → 输 `https://example.com` → 浏览器 tab 展示网页
-- [ ] 切到 Silent Chat 再切回 → 页面保留
-- [ ] 多 tab 能共存,浮动标签正确挤压 Silent Chat
-- [ ] 关闭窗口再打开,tabs 按 `tabs.json` 恢复
-- [ ] 不同 session 之间 tab 隔离(切 session 看到不同 tab 集合)
+- [x] 多 tab 共存,关闭再打开按 `tabs.json` 恢复
+- [x] 不同 workspace 之间 tab 隔离
+
+---
+
+## Phase 3 — 终端 tab ✅
+
+内嵌 xterm.js + node-pty,能跑 shell。
+
+- [x] `@xterm/xterm` + `@xterm/addon-fit`(renderer)
+- [x] `node-pty`(main),`postinstall` 跑 `electron-rebuild -w node-pty`
+- [x] `src/main/tabs/terminal-tab.ts` — 每个终端 tab 起一个 pty(默认 `$SHELL`)
+- [x] `pty.onData / onExit` → IPC channel 推 renderer
+- [x] `terminal.write / terminal.resize` IPC
+- [x] `<TerminalPane>` xterm 实例 + fit addon + ResizeObserver
+- [x] 跑 `ls / pwd / git status` 颜色正确
+
+---
+
+## Phase 4 — 文件 tab ✅
+
+文件树 + Monaco 文件查看 + 工作区文件操作。
+
+- [x] `<FileTreePanel>` 第二列 toggle 文件树(LeftNav 窄到 100px)
+- [x] `<FilePane>` Monaco editor(`@monaco-editor/react`)
+- [x] `src/renderer/src/lib/monaco-setup.ts` — Monaco worker 配置
+- [x] `file.read / write / pickOpen / createInWorkspace / listDir` IPC
+- [x] `createInWorkspace` 安全检查 `.silent` / `.git` / 越界
+- [x] 文件类型判断:text / image / binary;binary 给元数据提示
 
 ---
 
 ## 按需 — 浏览器 Tab 体验升级(对标 Cursor)
 
-MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。参考 Cursor 的内嵌浏览器形态(截图见上下文),补以下细节提升手感:
+MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 
 ### 地址栏 / 导航栏
 - [ ] 浏览器 tab 激活时,tab bar 下方浮出一条 chrome 工具栏(高 ~38px)
 - [ ] 左侧 icon 按钮组:`‹` 返回 · `›` 前进 · `↻` 刷新 · `★` 收藏
 - [ ] 中央可编辑 URL 地址栏,Enter 触发 `tab.navigate`,Esc 恢复原值
-- [ ] 右侧工具区(可选):`select-DOM` / 打开 DevTools / 侧栏折叠 / 更多菜单
+- [ ] 右侧工具区:`select-DOM` / DevTools / 更多菜单
 
 ### Tab 本身
-- [ ] Tab icon 差异化:browser tab 显示 favicon(`did-finish-load` 后从 page 提取)
-- [ ] Tab 关闭按钮 `×` 只在 `:hover` 或 `.active` 时显示(当前 hover 时显示所有非 pinned tab 的 × — 需调整)
-- [ ] Tab 右键菜单:复制 URL / 重载 / 复制 tab 到新 tab / 关闭其他
-
-### 内部实现要点
-- 导航栏作为 BrowserPane 的子组件,浏览器 tab 激活时才渲染
-- URL 状态从 main 端 `BrowserTabRuntime` 的 `did-navigate` 事件同步
-- favicon 从 `webContents.on('page-favicon-updated')` 抓 URL,renderer 显示为 `<img>`
-- 导航栏高度 38px 吃掉 split-left 顶部,BrowserPane ResizeObserver 会自动收缩 WebContentsView
-
-截图保存位置:原型对齐时再贴到 `design/prototypes/browser-chrome-v0.2.html`(暂无)
+- [ ] favicon 显示(`webContents.on('page-favicon-updated')`)
+- [ ] Tab 关闭按钮 `×` 只在 `:hover` 或 `.active` 时显示
+- [ ] Tab 右键菜单:复制 URL / 重载 / 复制到新 tab / 关闭其他
 
 ---
 
 ## 按需 — 分栏升级(Level 1 / Level 2)
 
-详见 `design/architecture.md` 的"分栏演进路线"。v0.1 默认停在 Level 0(hardcoded B 模式 1.3:1)。
+详见 `design/02-architecture.md` 的"分栏演进路线"。v0.1 默认停在 Level 0(hardcoded B 模式 1.3:1)。
 
 ### Level 1(约 2h,触发:dogfood 发现要调比例)
-- [ ] `sessions/<sid>/state/layout.json` — `{ splitRatio: 0~1 }`
-- [ ] IPC:`layout.getRatio(sessionId) / layout.setRatio(sessionId, r)`
-- [ ] `.split-left / .split-right` 用 CSS variable 或 inline `flex: <r>` 接 ratio
-- [ ] divider 加 `onMouseDown` 拖动 handler,move 时 setRatio
-- [ ] 默认值 0.56(等价 1.3:1)
+- [ ] `<workspace>/.silent/state/layout.json` — `{ splitRatio: 0~1 }`(.gitignore)
+- [ ] IPC:`layout.getRatio / setRatio`
+- [ ] divider 加拖动 handler,默认值 0.56(等价 1.3:1)
 
-### Level 2(1-2 天,触发:真实多-pane 需求)
+### Level 2(1-2 天,真实多-pane 需求触发)
 - [ ] `layout.json: { tree: LayoutNode }` — 递归 split 树
-- [ ] `<LayoutTree>` 组件递归渲染,叶子 = tab content
-- [ ] tab 拖放到目标 split 的处理(react-dnd 或手撸 HTML drag API)
-- [ ] 关 tab 时 empty pane 自动折叠
-- [ ] 键盘快捷键:`Cmd+\` 纵 split / `Cmd+Shift+\` 横 split
+- [ ] `<LayoutTree>` 递归渲染,叶子 = tab content
+- [ ] tab 拖放 + 关 tab empty pane 折叠
+- [ ] 键盘快捷键 `Cmd+\` / `Cmd+Shift+\`
 
 ---
 
-## Phase 5 — Session 化 · 产物、事件、版本(3.5-4 天)
+## Phase 5 — Workspace 化 · WorkspaceVCS + snapshot 子系统(~4d)🔄
 
-> 合并原 Phase 2.5(tab snapshot)和 Phase 5(observation channels);对齐 `architecture.md` 的统一模型:
-> **Session = git repo**,**Tab = `{type, path, state}` 指针**,**Events = session 级单一时间线**,**产物 per-tab 自管**。
+> **依据**:[`design/08-vcs.md`](design/08-vcs.md)。
+> **核心思想**:**workspace = 一个 git repo,workspace 版本 = git commit SHA**。`WorkspaceVCS` 是 workspace 同级的能力对象,提供 `emit / commit / log / diff / show / status / branch / checkout`。应用内 module(TabManager / BrowserTabRuntime / TerminalTabRuntime / ChatSession)主动调 `vcs.emit(...)` 写 events.jsonl + 在边界自动 commit。**不监听用户外部文件编辑**(无 chokidar),用户文件改动由下次 trigger 时 `git status` 懒发现。
 
-### 5a · 统一 TabMeta(0.5d)
-- [ ] `TabMeta.path` 提为一等字段(相对 session 目录 或 绝对路径)
-- [ ] `SessionType / SessionMeta.type` 保留字段但不再分支逻辑(v0.2 删);`boundFolder` → `linkedFolder`(语义降级为可选外部挂载)
-- [ ] `LocalFsAdapter.createSession` 初始 `silent-chat` tab 的 path 填 `messages.jsonl`
-- [ ] TabManager.open 创 browser/terminal tab 时顺带建 `tabs/<tid>/` 目录,path 填该相对路径
+### 已就绪(Phase 1-4 顺手完成的)
+- [x] TabMeta.path 一等字段 + `.silent/` 路径前缀
+- [x] `src/main/storage/events.ts` — `appendEventAt(wsPath, evt)`(Phase 5 搬到 `vcs/events.ts`)
+- [x] `LocalFsAdapter.appendEvent(agentId, wid, evt)`
+- [x] TabManager emit `tab.open / close / focus`
+- [x] BrowserTabRuntime emit `did-navigate / did-finish-load`
+- [x] TerminalTabRuntime emit `pty-exit`
 
-### 5b · Session 级 events.jsonl(0.5d)
-- [ ] `src/main/storage/events.ts` — `appendEvent(agentId, sid, evt)` 工具
-- [ ] StorageAdapter 加 `appendEvent` 方法
-- [ ] 所有 emit 点接入:
-  - TabManager: open / close / focus
-  - BrowserTabRuntime: did-navigate / did-finish-load / webRequest(节流)
-  - TerminalTabRuntime: command exec(preexec)/ exit / pty.data(节流)
-  - Chat harness(Phase 6 接入):user-turn / agent-turn(带 preview)
-- [ ] 取消原计划的 `context/*.jsonl` 按通道切分
+### 5a · `vcs/` module 骨架 + WorkspaceVCS 接口(0.5d)
+- [ ] `app/src/main/vcs/interface.ts` — `WorkspaceVCS { emit / commit / branch / checkout / status / log / diff / show / dispose }` + `EventSource` / `AutoCommitRule` / `CommitInfo` / `FileStatus` 类型
+- [ ] `app/src/main/vcs/factory.ts` — `createWorkspaceVCS(workspacePath: string, opts?): WorkspaceVCS`
+- [ ] 验收:`npm run typecheck` 过
 
-### 5c · 终端产物落盘(0.5d)
-- [ ] `tabs/<tid>/buffer.log` — pty.onData 同步 append(保留 rolling buffer 做 fast-replay,但**同时**落盘)
-- [ ] `tabs/<tid>/snapshots/<NNN>-<cmd-ts>.log` — preexec/exit 时切片保存该命令前后 scrollback
-
-### 5d · 浏览器产物落盘(1d)
-- [ ] `did-finish-load` 触发 `webContents.executeJavaScript('document.body.innerText')` → 落 `tabs/<tid>/snapshots/NNN-<ts>.md`
-- [ ] `latest` symlink 指向最新;garbage 每 tab 保留 50
-- [ ] 后续接 `defuddle` 类库做 readability(v0.2)
-
-### 5e · linkedFolder 支持(0.5d,可选)
-- [ ] `meta.yaml.linkedFolder` 字段
-- [ ] 如果 linkedFolder 是 git repo:定时 probe → 写 events.jsonl `{source:'linked', action:'probe', meta:{head, dirty}}`
-- [ ] 如果不是 git repo:每文件 sha256 的 pointer snapshot
-- [ ] chokidar watch linkedFolder → session events.jsonl(file create/modify/delete)
-
-### 5f · Git 集成 Layer 1 · 基础规则 auto-commit(1d)
+### 5b · git wrapper + Tier 1 规则 + IdleTimer(1d)
 - [ ] `npm i simple-git`
-- [ ] `src/main/storage/git.ts` — `SessionGit` 类(init / commit / status / diff)
-- [ ] `LocalFsAdapter.createSession` → auto `git init` + initial commit + 默认 .gitignore
-- [ ] commit 触发时机(Layer 1):
-  - Chat turn 完成 / 浏览器 did-finish-load 有新 snapshot / 终端命令 exit / 文件 save / tab close / idle 30s flush
-- [ ] commit message 格式化:`[source] action: summary` + footer(event-id / ts / tab-id)
-- [ ] `.gitignore` 默认:`.DS_Store` / `node_modules/` / linkedFolder 路径(若有) / 其他 cache
-- [ ] `state/tabs.json` 入库但不因 tab focus 抖动 commit(只在 tab open/close/switch 边界)
+- [ ] `app/src/main/vcs/git.ts` — 薄封装(init / commit / status / diff / log / show / branch / checkout)
+- [ ] `app/src/main/vcs/auto-commit.ts` — rule engine + debounce + IdleTimer
+- [ ] 4 条默认 Tier 1 规则(**没有 fs.save**,因为没 watcher):
+  - `chat.turn-end`(0ms debounce,Phase 6 接入后才触发)
+  - `browser.load-finish`(1s debounce,合并 SPA 多帧)
+  - `shell.exit`(0ms,每命令独立)
+  - `workspace.idle`(0ms,IdleTimer 30s 触发,commit if dirty)
+- [ ] `IdleTimer` 每次 `vcs.emit` 调用时 reset(纯内存 timer,无 chokidar)
+- [ ] commit message footer:`---\n trigger: <action>\n ts: <iso>\n event-id: <id>`
+- [ ] **新建 workspace 自动 `git init`** + 写默认 `.gitignore`:
+  ```
+  .DS_Store
+  *.swp
+  node_modules/
+  .silent/state/
+  .silent/tabs/*/buffer.log
+  ```
+- [ ] pre-commit hook:文件 > 10MB 拒绝
+- [ ] **`lastActiveAt` 拆出 `meta.yaml` → `.silent/state/last-active.json`(.gitignore)**
+- [ ] tab focus 不触发 commit(只 emit events.jsonl,不写 tabs.json)
 
-### 5g · IPC 补(0.5d)
-- [ ] `session.gitLog(sid, limit?)` → `{sha, message, ts, files[]}[]`
-- [ ] `session.gitDiff(sid, ref?, path?)` → patch text(供未来 UI 时间线 / diff 浏览)
+### 5c · events.ts 搬迁 + emit 单一入口(0.5d)
+- [ ] `app/src/main/storage/events.ts` → 搬到 `app/src/main/vcs/events.ts`
+- [ ] `WorkspaceVCS.emit` 内部:append events.jsonl + 按规则匹配可能 commit(单一 API,两件事)
+- [ ] `LocalFsAdapter.appendEvent` 改成委托给 vcs(或保留作为底层 utility)
+- [ ] TabManager / BrowserTabRuntime / TerminalTabRuntime 调用从 `appendEventAt` → `vcs.emit`
 
-**Layer 2 agent-curator 推到 Phase 6**(agent 作 git tool 用)。
+### 5d · BrowserTabRuntime snapshot(Defuddle)(1d)
+- [ ] `npm i defuddle`
+- [ ] `app/src/main/snapshots/browser.ts` —— `did-finish-load` → `executeJavaScript('document.documentElement.outerHTML')` → `new Defuddle(html, url, {markdown:true}).parse()` → 落 `.silent/tabs/<tid>/snapshots/NNN-<ts>.md`
+- [ ] 800ms timeout fallback 到 `innerText` 直存
+- [ ] **`latest.md` 用 copy 而非 symlink**(便于 `git log -p`)
+- [ ] snapshot 文件头加 URL + title + ts meta(LLM 单文件可读)
+- [ ] 落盘后调 `vcs.emit({source:'browser', action:'load-finish', ...})`(命中 Tier 1 → 1s debounce → commit)
+- [ ] 内容 < 200 字符跳过(loading 骨架)
 
-### 验收
-- [ ] 新建 session → `~/.silent-agent/agents/*/sessions/<sid>/.git/` 存在
-- [ ] 开浏览器导航 → `tabs/<tid>/snapshots/001-*.md` + events.jsonl 相关事件 + 一个 git commit 落下
-- [ ] 开终端跑 `ls && pwd && git status` → `buffer.log` 有输出 + snapshots/ 有 3 个切片 + events.jsonl 有 3 条 exec 事件 + 3 个 commit
-- [ ] `cd ~/.silent-agent/.../sessions/<sid> && git log --oneline` 看到可读的时间线
-- [ ] events.jsonl 里能看到 tab focus / open / close 事件(跨 tab 时序完整)
-- [ ] 删某 session → 整个目录 `rm -rf` 干净,没有外部残留
+### 5e · TerminalTabRuntime snapshot(zsh hook)(1d)
+- [ ] `app/src/main/snapshots/terminal.ts`
+- [ ] `tabs/<tid>/buffer.log` — pty.onData append(**.gitignore**,信息冗余在 NNN-cmd.log 里)
+- [ ] zsh `preexec` / `precmd` hook 注入(或 prompt 分隔标记切分)
+- [ ] `preexec` → `vcs.emit({source:'shell', action:'exec', ...})`(只记录,不 commit)+ 记 `bufferStartOffset`
+- [ ] `precmd / exit` → 切片 `snapshots/NNN-<cmd-ts>.log` + cp 到 `latest.log` + `vcs.emit({source:'shell', action:'exit', ...})`(命中 Tier 1 → commit)
+- [ ] 链式命令 `&&` / `;` 各自独立切片(每个 cmd 一个 commit)
+- [ ] 命令参数脱敏(token / 密码 / 私有 URL 白名单匹配后过滤)
 
----
+### 5f · IPC 暴露 vcs.* + agent meta-skill stub(0.5d)
+- [ ] `app/src/main/ipc/vcs.ts` — `vcs.log(wid, opts) / vcs.diff(wid, refA, refB?) / vcs.show(wid, sha) / vcs.status(wid)`
+- [ ] preload 暴露 `window.api.vcs.*`
+- [ ] (Phase 6 实施)agent-core builtin tool `workspace.log / diff / show / status / commit / branch / checkout` 包一层调 IPC
+- [ ] (可选)左栏 / 工作区 footer 简单时间线 UI(显示最近 5 个 commit)
 
-## Phase 3 — 终端 tab (1-2 天) ✅
-
-内嵌 xterm.js + node-pty,能跑 shell。
-
-### 依赖
-- [ ] `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-web-links`(renderer)
-- [ ] `node-pty`(main;注意 native 模块需 electron-rebuild)
-- [ ] package.json 加 `postinstall` 脚本跑 `electron-rebuild`(如有问题)
-
-### Main
-- [ ] `src/main/tabs/terminal.ts` — 每个终端 tab 起一个 pty 进程(默认 `$SHELL`)
-- [ ] `pty.onData(chunk)` → `webContents.send('pty.data', { tabId, chunk })`
-- [ ] `pty.onExit(...)` → 通知 renderer tab 关闭
-- [ ] IPC: `terminal.write(tabId, input)` / `terminal.resize(tabId, cols, rows)`
-
-### Renderer
-- [ ] `<TerminalPane tab={tab}>` — xterm 实例 + fit addon
-- [ ] 订阅 `pty.data` 流 → `term.write(chunk)`
-- [ ] 键盘输入 → `terminal.write`
-- [ ] ResizeObserver → `terminal.resize`
-
-### 验收
-- [ ] [+] → "新终端" → 能跑 `ls / pwd / git status`
-- [ ] 终端输出颜色正确
-- [ ] resize 正常,没有串行/超宽
-
----
-
-## Phase 4 — 文件 tab (1-2 天) ✅
-
-文件树 + 简单只读查看器。编辑不做(用户自备 vim/VSCode)。
-
-### Main
-- [ ] `src/main/tabs/file.ts` — 文件 tab 初始 cwd(session.boundFolder 或 home)
-- [ ] IPC: `file.readDir(path)` / `file.readFile(path)` / `file.stat(path)`
-- [ ] 文件类型判断:text / image / binary;binary 只显示元数据
-
-### Renderer
-- [ ] `<FilePane tab={tab}>` — 左树 + 右预览
-- [ ] 树:`fs-tree` 样式(点文件夹展开/收起)
-- [ ] 预览:text 用 `<pre>` 带语法高亮(`highlight.js` 轻量)
-- [ ] Markdown 特殊处理:展示渲染后版本(可选,可推 v0.2)
+### 5g · linkedFolder probe(0.5d,可选)
+- [ ] `meta.yaml.linkedFolder` 字段(已有)
+- [ ] IdleTimer 触发 `workspace.idle` 时,如果有 linkedFolder 顺手 probe HEAD + dirty → `vcs.emit({source:'linked', action:'probe', ...})`
+- [ ] linkedFolder 路径**自动**加进 workspace `.gitignore`
 
 ### 验收
-- [ ] [+] → "文件" → 默认打开 home 目录
-- [ ] 点 `.md / .ts / .json` 能看到内容
-- [ ] 图片能预览缩略图
-- [ ] 大文件(>1 MB)给出"过大不展示"提示
+- [ ] 新建 workspace → `<wsPath>/.git/` 存在 + initial commit
+- [ ] 开浏览器导航 → `tabs/<tid>/snapshots/001-*.md`(Defuddle 干净)+ `latest.md`(copy)+ events.jsonl 多条 + 1 commit
+- [ ] 开终端跑 `ls && pwd && git status` → 3 个 NNN-cmd.log 切片 + events.jsonl 6 条(3 exec + 3 exit) + 3 commits
+- [ ] 编辑用户文件 `notes.md`,然后跑任意命令 → 1 commit 包含 notes.md 变化(懒发现,无独立 fs.save commit)
+- [ ] 30s idle 触发 `workspace.idle` commit if dirty
+- [ ] `cd <wsPath> && git log --oneline` 看到可读时间线(`[browser] load: ...` / `[shell] exec: ...` / `[chat] turn: ...`)
+- [ ] `git diff sha1 sha2` 一次拿到全部变化(events.jsonl 增量 + 用户文件 diff + 新 snapshot)
+- [ ] 删 workspace → 整个目录 `rm -rf` 干净
+
+> **Tier 2 agent-curator 推到 Phase 6**(agent 拿 vcs tool 用,`workspace.commit('语义化 message')` / `workspace.branch / checkout`)。
+>
+> **OpenChronicle 多级压缩 / bookmark / wall-clock window 推到 v0.2**(详见 08-vcs.md 第 14 节)。
 
 ---
 
-## ~~Phase 5-old — Observation 三通道~~ (已并入 Phase 5 Session 化)
+## Phase 6 — agent-core monorepo + Chat 接 Claude(~5d)
 
-> observation 事件和 tab 产物合并到 Phase 5 Session 化里,按 session 级 `events.jsonl` 落盘。
-> `context/*.jsonl` 按通道切分的设计被取消。
+> **依据**:[`design/03-agent-core.md`](design/03-agent-core.md)。
+> **核心思想**:抽出 `@silent/agent-core`(Node-only / 零 Electron),4 层架构(Runtime / AgentRegistry / SessionManager / Sandbox)+ `runSession` 核心 loop 函数,Memory hook 推外。
 
----
+### 6a · monorepo + agent-core 骨架(0.5d)
+- [ ] `packages/agent-core/` 骨架:`package.json (name: "@silent/agent-core")`、空接口编译过
+- [ ] `src/types.ts` — `AgentConfig / Session / WorkspaceEvent / Tool / etc.`
+- [ ] `src/index.ts` — public exports
+- [ ] tsconfig path:`@silent/agent-core` → `packages/agent-core/src`
+- [ ] 验收:`npm run build` 三包都过(app + journal + agent-core)
 
-## Phase 6 — Chat 接 Claude API + Tool 框架 + 知识库 (3-4 天)
+### 6b · Sandbox 接口 + LocalFsSandbox(0.5d)
+- [ ] `src/sandbox/interface.ts` — `Sandbox { canRead/canWrite/canExec/readFile/writeFile/exec/listFiles/destroy }`
+- [ ] `src/sandbox/local-fs.ts` — MVP 默认实现,只用 `node:fs` + `child_process`
+- [ ] unit test:exec / readFile 通
 
-Silent Chat 真能跟 Claude 聊,能调 knowledge.lookup 等 tool。
+### 6c · AgentRegistry 接口 + app 实现(0.5d)
+- [ ] core 只 `src/registry/interface.ts` `AgentRegistry { get / list / update / delete }`
+- [ ] `AgentConfig` 类型(id / version / name / system / model / skills / tools / permissionPolicy)
+- [ ] **app 端**:`app/src/main/agent/jsonl-agent-registry.ts implements AgentRegistry`,落 `agents/<aid>/versions/v<n>/agent.yaml`
+- [ ] 改 skill / system → 产新 version,旧 version 仍在磁盘
+- [ ] 验收:update 产 v2;`get(id, version=1)` 取旧;core 包 grep 不出 `fs/yaml/git`
 
-### 配置
-- [ ] `~/.silent-agent/app-config.yaml` 支持 API key / model
-- [ ] 优先级:config file → `ANTHROPIC_API_KEY` env
-- [ ] 无 key 时 renderer 显示引导(粘 key 后落盘)
+### 6d · runSession 函数 + 4 路 stopReason(1d)
+- [ ] `src/session/run-session.ts` —— 核心 loop 函数(三参数 + DI)
+- [ ] 4 路退出:`end_turn` / `requires_action` / `retries_exhausted` / `terminated`
+- [ ] 内部 `dispatchTools`(并发 readonly 暂不做,串行)
+- [ ] Mock LLMClient 跑通 4 条退出路径(表驱动测试)
 
-### LLM client
-- [ ] `src/main/agent/llm.ts` — 封装 `@anthropic-ai/sdk` 的 messages.stream
+### 6e · SessionManager + Hooks + 重入(0.5d)
+- [ ] `src/session/manager.ts` — `create / send / stream / terminate / get`
+- [ ] `idle ≠ 销毁` 重入语义:`requires_action / end_turn / retries_exhausted` 都是 idle,等 `send` 重入 `runSession`,只有 `terminated` 才销毁 sandbox
+- [ ] `SessionHooks { onSessionStart / onSessionEnd / onToolUse? }` 接口
+- [ ] 每次重入都重走 `onSessionStart`(让上层拿到中途新 memory)
+- [ ] mock hooks 验证调用次数 / payload 注入
+
+### 6f · ClaudeAgentSdk LLMClient(1d)
+- [ ] `npm i @anthropic-ai/claude-agent-sdk`(走 Claude 订阅)
+- [ ] `src/llm/claude-agent-sdk.ts` —— 包一层适配让 SDK 兼容 LLMClient 接口
+- [ ] cache_control 集成:`system` + `tools` + 倒数第二条 assistant 打 ephemeral
+- [ ] 跑通脚本 `chat.mjs` 一来一回
+- [ ] (备)`AnthropicApi` / `OpenAi` LLMClient v0.2 再做
+
+### 6g · Tool 框架 + 内置 3 件套(0.5d)
+- [ ] `src/tools/registry.ts` + `Tool` 接口(name / description / input_schema / execute / runMode)
+- [ ] tool 执行 **只通过 sandbox**,不直接 fs / child_process
+- [ ] 内置 3 个:
+  - [ ] `shell.exec(cmd)` → `sandbox.exec`
+  - [ ] `file.read(path) / file.write(path, content)` → `sandbox.readFile / writeFile`
+  - [ ] `knowledge.lookup(query)` → 读 `agents/<aid>/knowledge/*.md`
+- [ ] demo:agent 跑 `ls` 收结果
+
+### 6h · Electron 接入 + WorkspaceAdapter(0.5d)
+- [ ] `app/src/main/agent/workspace-adapter.ts` —— `WorkspaceSandboxAdapter implements Sandbox` + `WorkspaceSessionHooks implements SessionHooks`
+- [ ] 接 IPC:`chat.send / stream / cancel`
+- [ ] `app-config.yaml` 支持 API key / model(优先级:config → `ANTHROPIC_API_KEY` env)
+- [ ] 无 key 时 renderer 显示引导
+- [ ] **agent 通过 hook 把 chat 事件推给 journal**(`onEvent` → `journal.emit({source:'chat', ...})`)
 - [ ] 默认 `claude-sonnet-4-6`;Opus 4.7 可选
 
-### Harness (minimal loop)
-- [ ] `src/main/agent/harness.ts` — `runLoop(agentId, sessionId, userInput)`
-- [ ] 消息追加到 `messages.jsonl`
-- [ ] stream 事件通过 `webContents.send('chat.delta', {...})` 推 renderer
-- [ ] 支持取消(renderer 切 session / 关 tab)
-
-### Tool 框架
-- [ ] `src/shared/tool.ts` — `interface Tool`(name/description/input_schema/execute/runMode)
-- [ ] `src/main/tools/registry.ts` — 注册 / 查找 / 枚举
-- [ ] tool_use 收到 → 查 registry → execute → 追加 tool_result → 继续 loop
-
-### 首批 Tools
-- [ ] `knowledge.lookup(query)` — 读 `agents/<aid>/knowledge/*.md`,让 Claude 做语义匹配(无 embedding)
-- [ ] `browser.navigate(url)` — 驱动现有 browser tab
-- [ ] `browser.extractText(selector?)` — 抽当前 tab 正文
-- [ ] `tabs.openBrowser(url)` — 新开 tab
+### 6i · 浏览器 / 终端 act tool(0.5d)
+- [ ] `browser.navigate(tabId, url)` —— 走 `webContents.loadURL`
+- [ ] `browser.extractText(tabId, selector?)` —— 走 `executeJavaScript`
+- [ ] `browser.waitForLoad(tabId)` —— 监听 `did-finish-load` 一次
+- [ ] `tabs.openBrowser(url)` / `tabs.openTerminal()`
+- [ ] (Playwright connectOverCDP 推 v0.2)
 
 ### Renderer
-- [ ] `useChat(sessionId)` hook 订阅流
-- [ ] 消息气泡支持逐字渲染
-- [ ] tool_use / tool_result 渲染(沿用 prototype .msg-tool / .msg-kb 样式)
+- [ ] `useChat(workspaceId)` hook 订阅 stream
+- [ ] 消息气泡逐字渲染
+- [ ] tool_use / tool_result 渲染(沿用 prototype `.msg-tool` / `.msg-kb` 样式)
 - [ ] 错误态:无 key / 网络错 / rate limit
 
 ### 验收
 - [ ] "hi" → Claude 流式回复
-- [ ] "错误码 ERR_CTX_TIMEOUT_042 是什么" → 调 knowledge.lookup → 返回错误码.md 命中
-- [ ] "帮我打开 logservice" → 调 browser.navigate,当前 tab 导航
+- [ ] "错误码 ERR_CTX_TIMEOUT_042 是什么" → `knowledge.lookup` 命中
+- [ ] "帮我打开 logservice" → `browser.navigate` 当前 tab 导航
 - [ ] `messages.jsonl` 完整记录含 tool_use / tool_result
+- [ ] turn-end 触发 git commit(Tier 1 规则)
+- [ ] core 包 grep 不到 `electron`
 
 ---
 
-## Phase 7 — 教教我仪式 + Skill v1 教学执行 (3-4 天)
+## Phase 7 — 教教我仪式 + Skill v1 教学执行(3-4 天)
 
-### Pattern 检测 (LLM 摘要)
-- [ ] 触发:session 空闲 3 分钟 / 用户手动点"分析一下"
-- [ ] 输入:`messages.jsonl + context/*.jsonl`(脱敏后)
+### Pattern 检测(LLM 摘要)
+- [ ] 触发:workspace 空闲 3 分钟 / 用户手动点"分析一下"
+- [ ] 输入:`messages.jsonl + events.jsonl`(脱敏后,通过 `vcs.diff(sha1, sha2)` + `vcs.log` 取区间)
 - [ ] Claude 输出 `{ title, steps[], confidence, source_refs[] }`
 - [ ] 阈值 `>= 0.7` 才推
 
@@ -336,33 +355,33 @@ Silent Chat 真能跟 Claude 聊,能调 knowledge.lookup 等 tool。
 ### Skill YAML
 - [ ] schema:`{ name, goal, trigger, input, steps[], success_criteria, trust_level, version }`
 - [ ] 落盘 `agents/<aid>/skills/<name>.yaml`
-- [ ] IPC: `skill.list / skill.get / skill.delete`
+- [ ] IPC:`skill.list / skill.get / skill.delete`
 
-### Skill Runner (教学模式)
-- [ ] `src/main/tools/skill-runner.ts` — 解释 YAML step 序列
+### Skill Runner(教学模式)
+- [ ] 解释 YAML step 序列
 - [ ] 匹配:用户 message + skill list → Claude 判定是否触发
-- [ ] 执行:每 step 前暂停,UI 弹"step N 等确认" 卡片
-- [ ] IPC: `step.confirm(stepId)` / `step.modify(stepId, input)` / `step.abort`
-- [ ] 执行记录 → `state/execution.jsonl`
+- [ ] 执行:每 step 前暂停,UI 弹"step N 等确认"卡片
+- [ ] IPC:`step.confirm / step.modify / step.abort`
+- [ ] 执行记录 → `<workspace>/.silent/state/execution.jsonl`(.gitignore)
 - [ ] skill.version.usage_count 累加
 
 ### UI
 - [ ] 教学模式 Push 视图(Frame 3 样式)
-- [ ] 草稿预览卡片(tentative rec-card)
+- [ ] 草稿预览卡片
 - [ ] 左栏 Skills 计数 + "已学会"小卡
 
 ### 验收
-- [ ] 跑一次 dogfood:手动查 logid → "教教我" → 3 问填完 → skill yaml 生成
-- [ ] 新 session 输"logid xxx" → 匹配 skill → 教学走 3 步 → 推荐答案可复制
+- [ ] dogfood 跑一次:手动查 logid → "教教我" → 3 问填完 → skill yaml 生成
+- [ ] 新 workspace 输 "logid xxx" → 匹配 skill → 教学走 3 步 → 推荐答案可复制
 
 ---
 
-## Phase 8 — Dogfood (1 周)
+## Phase 8 — Dogfood(1 周)
 
 - [ ] 自用 5 天,每天至少一次真实 logid 查询场景
 - [ ] 记录:不顺手的点 / 假阳性 pattern / 教学粒度是否烦
 - [ ] 调 threshold,fix 明显 bug
-- [ ] 体感评估 "<1.5s 冷启动 / <250MB 运行内存"
+- [ ] 体感评估 "<1.5s 冷启动 / <250 MB 运行内存"
 
 **验收**:连续 5 天用得下去;至少 1 次"啊对哦"体验;总结 3 个以上可复用 pattern。
 
@@ -370,20 +389,31 @@ Silent Chat 真能跟 Claude 聊,能调 knowledge.lookup 等 tool。
 
 # v0.2 — 补全与接入(约 4 周)
 
+### Playwright 接入(完整 Act 能力)
+- [ ] `npm i playwright-core`
+- [ ] Electron 启动加 `--remote-debugging-port=9222`
+- [ ] `playwright.chromium.connectOverCDP(...)` 接现有 webContents
+- [ ] 49 verb 中常用的 ~10 个:`click / fill / press / locator / waitForLoadState / screenshot`
+- [ ] CDP 跟 DevTools 冲突 spike
+
+### Journal 升级
+- [ ] **OpenChronicle 启示** —— 多级压缩 pipeline(1min → 5min → 30min)
+- [ ] Bookmark / processors.jsonl(consumer 水位)
+- [ ] Wall-clock window pattern 检测
+- [ ] PatternDetectorSink / SummarySink
+- [ ] 可选 MCP server 暴露 journal(read-only,其他 agent 可订阅)
+- [ ] 月度 archive(超 30 天 jsonl 移到 `.silent/archive/`)
+- [ ] `workspace.config.streamInGit: false` opt-out(不让 messages/journal 进 git,适合代码 workspace 上 GitHub)
+
 ### 飞书 IM 渠道(exclusive)
 - [ ] `connections/feishu/` auth + capabilities 实装
 - [ ] lark-cli 或 lark-im OpenAPI 接入
-- [ ] owner agent 收 @ 消息 → 创建/路由到 session
+- [ ] owner agent 收 @ 消息 → 创建/路由到 workspace
 - [ ] 左栏徽章数字实时
 
-### Workspace Promote
-- [ ] Chat session 右键"提升为 Workspace"
-- [ ] 选外挂文件夹 → 启动 observers → 更新 `meta.yaml.type`
-- [ ] si-tag ws 样式
-
 ### 多 Agent UI
-- [ ] LeftNav 顶部下拉:切当前 window 的 agent
-- [ ] 菜单"New Window for Agent"
+- [ ] LeftNav 顶部下拉切 agent
+- [ ] 菜单 "New Window for Agent"
 - [ ] Agent 设置面板(model / system prompt / avatar)
 - [ ] 新建/重命名/删除 agent UI
 
@@ -394,13 +424,16 @@ Silent Chat 真能跟 Claude 聊,能调 knowledge.lookup 等 tool。
 
 ### Connection Capability 管理
 - [ ] 设置面板展示每 connection 的 capabilities + attachment
-- [ ] exclusive capability 换 owner
-- [ ] shared capability 增删 consumer
+- [ ] exclusive capability 换 owner / shared 增删 consumer
 
 ### 左栏入口补内容
-- [ ] 日程 panel(lark-calendar,shared capability)
+- [ ] 日程 panel(lark-calendar,shared)
 - [ ] TODO panel(lark-task)
 - [ ] 邮箱 panel(lark-mail / gmail)
+
+### Background agent + git worktree(借鉴 Yume)
+- [ ] 长任务分支跑 agent,合并前冲突检测
+- [ ] `yume-async-{type}-{id}` 命名
 
 ---
 
@@ -410,8 +443,7 @@ Silent Chat 真能跟 Claude 聊,能调 knowledge.lookup 等 tool。
 - [ ] 双向飞书(agent 主动回推)
 - [ ] Pattern 检测升级:PrefixSpan(mechanical)+ embedding 聚类(semantic)
 - [ ] 外部知识库 connection(飞书 wiki / Notion)
-- [ ] Session → Workspace 真实文件迁移
-- [ ] 影子文本(docx/pdf → shadow.md)进 observe 流
+- [ ] 影子文本(docx/pdf → shadow.md)进 observe 流(详见 05-observation-channels.md 子模块)
 
 ---
 
@@ -419,22 +451,24 @@ Silent Chat 真能跟 Claude 聊,能调 knowledge.lookup 等 tool。
 
 - [ ] `CloudSyncAdapter` wraps `LocalFsAdapter`(双写 + 本地优先)
 - [ ] L1/L2 memory + skills 先同步
-- [ ] Managed Agent runtime 替换本地 harness
+- [ ] Managed Agent runtime 替换 `ClaudeAgentSdk`(同 LLMClient 接口)
 - [ ] Web tools 路由到云端
-- [ ] 跨设备 session(observation 保留本地,summary 同步)
+- [ ] `RemoteSandbox`(Docker / Firecracker)— 同 Sandbox 接口
+- [ ] 跨设备 workspace(observation 保留本地,summary 同步)
+- [ ] `CloudAgentRegistry implements AgentRegistry` —— core 一行不改
 
 ---
 
 # 基础设施 & 维护
 
 ### 测试
-- [ ] Playwright E2E(Phase 8 后):启动 / 建会话 / 开 tab / 发消息
-- [ ] Unit:storage 层 + harness 核心 loop + tool registry
+- [ ] Playwright E2E(Phase 8 后):启动 / 建 workspace / 开 tab / 发消息
+- [ ] Unit:storage / journal / agent-core 各包
 
 ### 打包
 - [ ] `electron-builder` 配置
 - [ ] macOS dmg(arm64 + x64)
-- [ ] 自动签名(要 Apple Developer 证书,可选)
+- [ ] 自动签名(Apple Developer 证书)
 
 ### CI
 - [ ] GitHub Actions:typecheck + build on PR
@@ -450,20 +484,21 @@ Silent Chat 真能跟 Claude 聊,能调 knowledge.lookup 等 tool。
 
 | Phase | 估时 | 累计 | 状态 / 可 dogfood |
 |---|---|---|---|
-| 1 存储 + Agent/Session CRUD | 0.5d | 0.5d | ✅ 无 AI,左栏真实数据 |
+| 1 存储 + Agent/Workspace CRUD | 0.5d | 0.5d | ✅ 无 AI,左栏真实数据 |
 | 2 浏览器 tab | 2–3d | 3.5d | ✅ 可当浏览器用 |
 | 3 终端 tab | 1–2d | 5.5d | ✅ 轻 IDE 雏形 |
 | 4 文件 tab + Monaco | 1–2d | 7.5d | ✅ 三件套齐 |
-| **5 Session 化 · 产物+事件+git** | 3.5–4d | 11.5d | **下一个**:每 session 一 git repo,events.jsonl,产物快照 |
-| 6 Chat + Tools + git agent curator | 3–4d | 15.5d | AI 首次接入 |
-| 7 教教我 + Skill | 3–4d | 19.5d | 完整闭环 |
-| 8 Dogfood | 1w | 26.5d (~4w) | v0.1 出货 |
+| **5 Workspace 化 · WorkspaceVCS+snapshot** | ~4d | 11.5d | **🔄 进行中**:`vcs/` module + Tier 1 auto-commit + Defuddle snapshot + zsh hook |
+| **6 agent-core monorepo + Chat** | ~5d | 17.5d | AI 首次接入(`@silent/agent-core` + `runSession` + Claude SDK) |
+| 7 教教我 + Skill | 3–4d | 21d | 完整闭环 |
+| 8 Dogfood | 1w | 28d (~4w) | v0.1 出货 |
 
-相比原 `mvp-plan.md` 估 6–8 周更激进,因为:
+相比早期 `archive/mvp-plan-v3-tauri.md` 估 6–8 周更激进,因为:
 - 多 agent 先只做数据模型,UI 砍到 0
 - connections 只占位,飞书 IM 推 v0.2
 - 日程/TODO/邮箱 推 v0.2
 - Skill 升级路径推 v0.2
+- Playwright + AX tree 推 v0.2
 
 ---
 
@@ -471,6 +506,10 @@ Silent Chat 真能跟 Claude 聊,能调 knowledge.lookup 等 tool。
 
 - **Dogfood 任务**:logid 查日志(见 `design/prototype-v0.1.html` Frame 1-3)
 - **第一个 skill**:`查logid报告`
-- **Agent 身份**:`silent-default` (slug, MVP 唯一)
+- **Agent 身份**:`silent-default`(slug,MVP 唯一)
 - **存储根**:`~/.silent-agent/`
-- **设计锚**:`design/architecture.md` 是代码结构和数据模型的真相源
+- **设计锚**:
+  - [`design/02-architecture.md`](design/02-architecture.md) — 代码结构 / 数据模型真相源
+  - [`design/08-vcs.md`](design/08-vcs.md) — Phase 5 实施依据
+  - [`design/03-agent-core.md`](design/03-agent-core.md) — Phase 6 实施依据
+  - [`design/_Index.md`](design/_Index.md) — 全部设计文档索引

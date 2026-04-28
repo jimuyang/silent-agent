@@ -35,8 +35,9 @@ npm run dev
 
 ## 设计文档入口
 
-- [架构与技术选型](design/architecture.md)
-- [产品定位 v3](design/positioning-strategy-v3-workspace.md)
-- [MVP 实施路径](design/mvp-plan.md)
-- [观察通道](design/observation-channels.md)
+- [设计文档索引](design/_Index.md) — 8 篇核心 + archive 历史
+- [01 产品定位](design/01-product-vision.md) — AI-push / Artifact-first / 轻工作区
+- [02 架构](design/02-architecture.md) — 五层架构 / 数据模型 / Workspace = git repo
+- [03 agent-core](design/03-agent-core.md) — LLM 运行时 4 层 + `runSession`
+- [08 vcs](design/08-vcs.md) — WorkspaceVCS · workspace 暴露的版本能力 / Tier 1 auto-commit / Browser+Terminal snapshot
 - [原型图](design/prototype-v0.1.html)

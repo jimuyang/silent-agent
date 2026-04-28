@@ -1,13 +1,13 @@
-# 工作区交互设计：observe / learn / act 三大空间
+# 工作区交互设计:observe / learn / act 三大空间
 
-> **v0 → v2 → v3 回归说明**（2026-04-23）：本篇最早是 v0 的工作区目的地方案，v2 一度因 Coze 三重失败否定（见历史篇 [positioning-strategy.md](positioning-strategy.md)）。v3 重新承认"工作区才是 AI-push 的最佳观察窗口"——但采用**中接管 + 轻工作区**形态：只接管过程，不抢最终交付；内嵌工具"够用不专业"；everything is file。上层锚定见 [positioning-strategy-v3-workspace.md](positioning-strategy-v3-workspace.md)。
+> 本篇是 [01-product-vision.md](01-product-vision.md) 的具体落地 —— 工作区在屏幕上长什么样、用户怎么走完一天。产品定位 / 哲学层见 01,本篇专注 UX 细节(布局 / 内联建议 / Phase 1-4 接管路径)。
 
 ## TL;DR
 
-- 工作区 = **一个文件夹 + 一套轻量 UI**（Tauri 最小壳 + xterm + WebView + AI 侧栏，**不内嵌编辑器**，< 100 MB，< 1 s 冷启动；形态参考 cmux）
-- 三大空间：**观察**（file / browser / shell watcher）、**学习**（pattern → skill）、**操作**（用户自做 + Agent 自动执行）
-- 哲学：**everything is file**，事件 / skill / 状态 / 产出全落盘到 `~/Workspaces/<name>/`，可 git、可 diff、可 rewind
-- 用户心智：**增强版任务文件夹**，打开 = 隐式授权观察，关闭 = 不再观察
+- 工作区 = **一个文件夹 + 一套轻量 UI**(Electron 壳 + xterm + WebContentsView + AI 侧栏 + Monaco 文件查看,**不强塞编辑器**;形态参考 cmux)
+- 三大空间:**观察**(file watcher / 内嵌浏览器 / 终端 hook)、**学习**(pattern → skill)、**操作**(用户自做 + Agent 自动执行)
+- 哲学:**everything is file**,事件 / skill / 状态 / 产出全落盘到 `<workspace>/.silent/`,可 git、可 diff、可 rewind
+- 用户心智:**增强版任务文件夹**,打开 = 隐式授权观察,关闭 = 不再观察
 
 ## 核心 idea
 
@@ -113,7 +113,7 @@ flowchart LR
 - **抓包零成本** — 内嵌浏览器的网络层完全可控，能看到所有 API 请求响应
 - **不侵入用户的日常浏览器** — 工作用工作区浏览器，私人用 Chrome，边界清晰
 
-技术实现：Electron/Tauri 内嵌 WebView，底层是 Chromium，支持 DevTools Protocol 拿所有网络请求。
+技术实现:Electron `WebContentsView` 内嵌,底层是 Chromium,通过 `executeJavaScript` / `webRequest` / `did-finish-load` 等 API 拿到 URL、网络请求和页面内容(详见 [05-observation-channels.md](05-observation-channels.md))。
 
 ### 3. API 抓包层 — 理解用户在用什么服务
 
@@ -288,20 +288,20 @@ flowchart TB
 
 工作区的独特性：**它既是用户的工具，又是 Agent 的观察窗口，两者是同一个东西。**
 
-## 与 v3 其他文档的映射
+## 与其他文档的映射
 
-| 本篇章节 | 对应 v3 文档 |
+| 本篇章节 | 对应文档 |
 |---|---|
-| 文件层 / 浏览器层 / API 抓包层 | [observation-channels.md](observation-channels.md) — P0 工作区内三通道的技术规格 |
-| 辅助模式 / 沉淀模式 | [core-insight-ai-push.md](core-insight-ai-push.md) — "教教我"仪式的设计 |
-| 本地 Agent 架构图 | [cloud-vs-local-agent.md](cloud-vs-local-agent.md) — 云 / 本地职责划分 |
-| Phase 1–4 无感接管 | [mvp-plan.md](mvp-plan.md) — MVP 对应 Phase 1–2；v3 终态停在 **Phase 3（工作区内无感）**，不扩展到用户整台电脑（避免 Rewind / Limitless 的隐私陷阱） |
+| 文件层 / 浏览器层 / API 抓包层 | [05-observation-channels.md](05-observation-channels.md) — P0 工作区内三通道的技术规格 |
+| 辅助模式 / 沉淀模式 | [01-product-vision.md](01-product-vision.md) Part 1 — AI-push 与"教教我"仪式 |
+| 本地 Agent 架构图 | [06-cloud-vs-local-agent.md](06-cloud-vs-local-agent.md) — 云 / 本地职责划分 |
+| Phase 1–4 无感接管 | [`task.md`](../task.md) — MVP 对应 Phase 1–4 壳;v3 终态停在工作区边界内,不扩展到用户整台电脑(避免 Rewind / Limitless 的隐私陷阱) |
+| 事件落 `events.jsonl` | [08-vcs.md](08-vcs.md) — 已演化为统一 `events.jsonl` 单一时间线 |
 
-## 关联笔记
+## 关联文档
 
-- [positioning-strategy-v3-workspace.md](positioning-strategy-v3-workspace.md) — v3 上层定位锚
-- [core-insight-ai-push.md](core-insight-ai-push.md) — AI-push 是底层驱动
-- [artifact-first-architecture.md](artifact-first-architecture.md) — 产物视角的哲学基础
-- [observation-channels.md](observation-channels.md) — 通道技术规格
-- [mvp-plan.md](mvp-plan.md) — 6 周实施路径
-- [cloud-vs-local-agent.md](cloud-vs-local-agent.md) — 架构分层
+- [01-product-vision.md](01-product-vision.md) — 上层定位 / AI-push / 产物哲学
+- [02-architecture.md](02-architecture.md) — 五层架构 / Workspace = git repo
+- [05-observation-channels.md](05-observation-channels.md) — 通道技术规格
+- [06-cloud-vs-local-agent.md](06-cloud-vs-local-agent.md) — 本地 / 云端架构分层
+- [08-vcs.md](08-vcs.md) — 事件流 + 版本管理

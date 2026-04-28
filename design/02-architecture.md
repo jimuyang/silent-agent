@@ -44,7 +44,7 @@ flowchart TB
 
     subgraph CAPS["④ Capability Layer"]
         C1[Browser CDP ops]
-        C2[File watcher · chokidar]
+        C2[VCS · simple-git wrapper]
         C3[Shell · node-pty]
         C4[Knowledge lookup · *.md]
         C5[Skill runner · YAML]
@@ -233,260 +233,35 @@ MVP 主区有两种显示模式:
 - 懒加载:展开时再读子目录;不预扫描全树
 - 没有 `×` 关闭按钮 —— 它是 **pinned tab**,只通过 toggle 收起;离 📁 按钮很近,不需要冗余
 
-### 版本管理(Git per workspace)
+### 版本管理 + Events 设计 → 详见 [08-vcs.md](08-vcs.md)
 
-每个 workspace 目录自动 `git init`,作为一个独立 repo。两层 commit 策略:
+每个 workspace 目录自动 `git init`,作为独立 repo。**Workspace 版本 = git commit SHA**。
 
-**Layer 1 — 基础规则(auto-commit)**:保证最低版本链,不依赖 agent。触发点:
-- Chat turn 完成
-- 浏览器 `did-finish-load` 且有 snapshot 新增
-- 终端命令 `exit`
-- 文件 save(file tab / workspace 内文件)
-- Tab close
-- Workspace idle 30s 且 dirty(兜底 flush)
+**应用内事件**(chat / browser / terminal / tab 生命周期)由 app 内 module 主动 emit 进 `<workspace>/.silent/events.jsonl`(append-only,**进 git**)。**不监听用户外部 fs 编辑** —— 用户 vim :w 之后没有事件,但下一次 emit 触发 commit 时 `git status` 会自然把变化捡进版本。
 
-**Layer 2 — Agent Curator(Phase 6+,当 agent 能用 git tool)**:
-- agent 拿 `git.status / git.diff / git.log` 看变化
-- agent 决定合理边界 commit,写语义化 message
-- agent 跑 skill 前 `git branch` 实验,失败 `checkout` 回滚
-- 用户说"commit 一下,message 写 X" agent 直接调
+`WorkspaceVCS` 是 workspace 同级暴露的能力对象,提供 `emit / commit / log / diff / show / status / branch / checkout`。Auto-commit 4 条 Tier 1 规则在边界事件(turn-end / load-finish / shell.exit / idle 30s)触发。完整设计见 **[08-vcs.md](08-vcs.md)**。
 
-**Commit message 规范**(两层都用):
-```
-[source] action: short summary
+**linkedFolder(嵌套 repo)处理** — 只记 ref,不复制内容:
+- `.gitignore` 包含 linkedFolder 路径
+- `events.jsonl` 记 `{source:'linked', action:'probe', meta:{head:<sha>, dirty:bool}}`
+- linkedFolder 内容演进由它自己的 git 管
 
----
-event-id: evt_abc123
-ts: 2026-04-24T11:40:30.123Z
-tab-id: browser-abc
-```
+### Agent 运行时 → 详见 [03-agent-core.md](03-agent-core.md)
 
-**linkedFolder(嵌套 repo)处理** — **D 方案:只记 ref,不复制内容**:
-- workspace `.gitignore` 包含 linkedFolder 路径
-- events.jsonl 记 `{source: 'linked', action: 'probe', meta: {head: <sha>, dirty: bool}}`
-- linkedFolder 内容演进 agent 用 linkedFolder 自己的 git 看
-- 如果 linkedFolder 不是 git repo,退化为"每文件 sha256 的 pointer snapshot"
+LLM 对话运行时抽出独立包 **`@silent/agent-core`**,Node-only / 零 Electron 依赖。**4 层架构**:
 
-**实现栈**:
-- `simple-git` npm 包(薄 wrapper over git CLI),macOS 系统自带 git binary
-- `src/main/storage/git.ts` — `WorkspaceGit` 类封装 init/commit/status/diff
-- Phase "Workspace 化" 先做 Layer 1,Phase 6(Chat)开放给 agent 用
+| 层 | 职责 |
+|---|---|
+| **Runtime** | 进程级,加载/卸载 Session,并发控制 |
+| **AgentRegistry** | `AgentConfig` CRUD + 版本化(接口在 core,JsonlAgentRegistry 实现在 app) |
+| **SessionManager** | Session 状态机(create/running/idle/terminated)+ `runSession` 核心 loop 函数 |
+| **Sandbox** | 执行边界(`exec/read/write/...`),策略可换(LocalFs / ReadOnly / Docker / Remote) |
 
-### Events 设计:Workspace 级单一时间线
+`runSession(agent, session, sandbox, *, llm, hooks)` 是核心 loop 函数(不是类),4 路退出 → `end_turn` / `requires_action` / `retries_exhausted` / `terminated`,跟 Anthropic Managed Agent 同构。
 
-所有事件汇入 `workspaces/<wid>/.silent/events.jsonl`,按 ts 时序追加。跨 tab 动作(tab focus / open / close)天然归属 workspace,不塞进某个 tab。
+**app 端 Workspace 双面 adapter**:同一个工作区目录给 agent-core 当 Session(读 messages.jsonl)+ Sandbox(读写文件 / 跑命令)。Memory 通过 `onSessionStart` / `onSessionEnd` hook 推到 harness 外,由 app 层管。
 
-**Event schema**:
-```typescript
-interface WorkspaceEvent {
-  ts: string              // ISO
-  source: 'tab' | 'browser' | 'shell' | 'file' | 'chat' | 'agent' | 'workspace' | 'linked'
-  action: string          // 按 source 定义: focus/open/close/navigate/request/exec/edit/turn/...
-  tabId?: string          // 可选,meta 事件(workspace / linked)可无
-  target?: string         // URL / command / path
-  meta?: Record<string, unknown>
-}
-```
-
-典型片段(一次 "查 logid" 流):
-```jsonl
-{"ts":"..01","source":"chat","action":"user-turn","tabId":"silent-chat","meta":{"preview":"帮我查 logid xxx"}}
-{"ts":"..10","source":"tab","action":"open","tabId":"browser-abc","meta":{"type":"browser","url":"..."}}
-{"ts":"..10","source":"tab","action":"focus","tabId":"browser-abc"}
-{"ts":"..15","source":"browser","action":"navigate","tabId":"browser-abc","target":"https://logservice..."}
-{"ts":"..30","source":"tab","action":"focus","tabId":"silent-chat"}
-{"ts":"..32","source":"agent","action":"turn","tabId":"silent-chat","meta":{"preview":"..."}}
-{"ts":"..50","source":"tab","action":"open","tabId":"term-xyz","meta":{"type":"terminal"}}
-{"ts":"..52","source":"shell","action":"exec","tabId":"term-xyz","target":"git status"}
-```
-
-**Chat 消息双写**:
-- `messages.jsonl` 存全文(含 tool_use / tool_result block),harness / 回放用
-- `events.jsonl` 存预览(`meta.preview` 截断 120 字符),用于跨 tab 时序 + pattern mining
-
-### AgentRuntime 三件套 — Harness / Session / Sandbox 解耦
-
-借鉴 Managed Agents 的设计思想:**对话运行时由三件套组成,彼此正交、可独立替换**。
-
-| 对象 | 职责 | 换的时机 | 持久度 |
-|---|---|---|---|
-| **Session** | 身份 / 对话历史 / system prompt / knowledge | 切会话 / 切持久层 | 永久 |
-| **Sandbox** | Tool 执行边界:cwd / 可读写路径 / env / 网络 / 超时 | 切"执行模式"(真执行 / dry-run / 容器 / 远程 VM) | 与 Session 独立 |
-| **Harness** | LLM loop 运行时:哪家模型 / streaming / compaction / 权限 gate | 切 provider 或 loop 策略 | 每次 start 一次,可 recreate |
-
-#### 接口在 agent-core,实体在 app —— 现在融合 / 未来分离
-
-**agent-core 只定义三个接口**(`Harness` / `Session` / `Sandbox`),不知道"workspace"这个词。
-
-**app 的 `Workspace`** 是个"双面体":同一个工作区目录(`.silent/messages.jsonl` + workspace 根作 cwd)既给 harness 当 `Session`(读写对话),也给 harness 当 `Sandbox`(读写文件 / 跑命令)。MVP 通过两个 adapter 把同一个 Workspace 暴露成两个接口:
-
-```typescript
-// app 端伪代码
-const ws = await loadWorkspace(workspaceId)
-const session  = new WorkspaceSessionAdapter(ws)   // 实现 agent-core Session 接口
-const sandbox  = new WorkspaceSandboxAdapter(ws)   // 实现 agent-core Sandbox 接口
-const harness  = createAgentRuntime({ session, sandbox, ... })
-```
-
-**为什么不直接让 Workspace implements Session, Sandbox?** —— adapter 的好处是 Workspace 不被 agent-core 的接口反向耦合;agent-core 真换接口签名 app 只改 adapter,不改业务。
-
-**未来上云,Session 和 Sandbox 自然分离**:
-- Session 持久化迁到云端 DB(跨设备同步对话)
-- Sandbox 切到远程容器 / VM(强隔离 / 多租户 / GPU)
-- 同一个 Session 可以跑在不同 Sandbox 上(本地 dry-run → 云端真执行)
-- 同一个 Sandbox 也可以服务不同 Session(共享开发环境)
-- **agent-core 接口不需要改** —— 这就是三件套从 day 1 就分开抽象的回报
-
-```
-MVP(本地)                     云端(v1+)
-┌──────────────┐              ┌─────────────────┐
-│  Workspace   │              │  CloudSession   │ (DB-backed)
-│  ┌────────┐  │              │  + cache_control│
-│  │Session │  │              └────────┬────────┘
-│  └────────┘  │                       │
-│  ┌────────┐  │              ┌────────▼────────┐
-│  │Sandbox │  │              │ RemoteSandbox   │ (Docker / VM)
-│  └────────┘  │              │  + audit log    │
-└──────────────┘              └─────────────────┘
-   1 个实体两面             N:M 任意装配
-```
-
-#### Harness 在 LLM Chat 之上做的 8 件事
-
-LLM Chat 是无状态函数(`messages → stream`),Harness 是长期活着的 agent 进程,多了:
-
-1. **对话状态** — 内部维护 messages 历史
-2. **工具循环** — 识别 tool_use 块 → 执行 → 回灌 tool_result → 再 call,直到 end_turn
-3. **Compaction** — 对话过长时自动总结
-4. **权限门(教学模式核心)** — 每次 tool call 前通过 Sandbox + permission gate
-5. **取消** — 中断 stream + 清理 pending tool call
-6. **事件广播** — emit user-turn / tool-call / agent-turn / 错误 到 events.jsonl
-7. **Context 注入** — 动态拼 system(+ 观察事件 + memory + tab 状态)
-8. **Workspace 绑定** — tool 执行绑定到对应 workspace 的 Sandbox
-
-#### 接口形态
-
-```typescript
-// ===== Sandbox =====
-interface Sandbox {
-  readonly workspaceId: string
-  readonly workspacePath: string     // 关联的 workspace 根(引用,不拥有)
-  readonly cwd: string
-  readonly env: Record<string, string>
-
-  canRead(absPath: string): boolean
-  canWrite(absPath: string): boolean
-  canExec(cmd: string): boolean
-
-  readFile(pathRelOrAbs: string): Promise<string>
-  writeFile(pathRelOrAbs: string, content: string): Promise<void>
-  exec(cmd: string, opts?: ExecOpts): Promise<ExecResult>
-}
-
-// 实现:
-class LocalFsSandbox implements Sandbox { /* MVP 默认 */ }
-class ReadOnlySandbox implements Sandbox { /* dry-run */ }
-class DockerSandbox implements Sandbox { /* 容器,v1+ */ }
-
-// ===== Harness =====
-interface Harness {
-  readonly providerName: string      // 'claude-agent-sdk' / 'anthropic-api' / 'openai' / ...
-  readonly modelName: string
-  sendMessage(text: string): HarnessStream
-  cancel(): void
-  listMessages(): ChatMessage[]
-}
-
-class ClaudeAgentSdkHarness implements Harness { /* 走 Claude 订阅 */ }
-class AnthropicApiHarness implements Harness { /* 走 API key pay-per-token */ }
-class OpenAiHarness implements Harness { /* OpenAI */ }
-
-// ===== Factory(粘合三件套) =====
-function createAgentRuntime(deps: {
-  session: Session                                    // agent-core 接口,app 用 WorkspaceSessionAdapter 实现
-  sandbox: Sandbox                                    // agent-core 接口,app 用 WorkspaceSandboxAdapter 实现
-  harnessConfig: { provider: string; model: string; systemPrompt: string; tools: ToolDefinition[] }
-  onEvent?: (e: HarnessEvent) => void
-}): Harness
-```
-
-#### 为什么 Workspace ≠ Sandbox
-
-`Workspace = 数据(目录 + .silent/)`,`Sandbox = 策略(在该目录上允许做什么)`。MVP 是 1:1 映射,但概念区分后可以:
-
-- 同一 workspace 多个 sandbox:默认(全读写)/ dry-run(只读)/ audit(log 所有写)
-- 不同 workspace 共享一套 sandbox 策略(如"禁读 `~/.ssh`"全局)
-
-Tool 执行**只通过 sandbox**,不直接 `node:fs`/子进程:
-
-```typescript
-export const shellExecTool: ToolDefinition = {
-  name: 'shell.exec',
-  inputSchema: { type: 'object', properties: { cmd: { type: 'string' } } },
-  execute: async (input, { sandbox }) => {
-    if (!sandbox.canExec(input.cmd)) throw new Error('denied by sandbox')
-    return sandbox.exec(input.cmd)
-  },
-}
-```
-
-换 DockerSandbox 时 tool 代码零改动。
-
-#### Prefix Cache 策略 — Harness 内部自管 cache_control
-
-LLM 本身是无状态函数(`messages → stream`),"session" 是客户端便利 —— Anthropic prompt cache 是**内容寻址**的(prefix hash),**不绑 session_id**。所以我们自己管 messages.jsonl,通过手动打 `cache_control` 一样能拿到 cache hit。
-
-**MVP 决策(Option A)**:
-- **不**用 SDK 的 `resume`/`session_id` 续会话
-- `messages.jsonl` 是**真相源**,每次 `sendMessage` 自己 load 历史 + 在合适位置打 `cache_control`
-- SDK session_id 的角色被显式拆给 messages.jsonl(历史)+ Harness(cache 断点决策)+ Layer 1 git(版本)
-
-**断点放法**(Anthropic 限制每请求最多 4 个 `cache_control`):
-1. `system` prompt 末尾 — 几乎不变,长 TTL 收益最大
-2. `tools` 数组末尾 — agent 工具定义稳定
-3. **倒数第二条** assistant message 末尾 — 让"上一轮的 prefix"成为下一轮的 cache key
-4. (留 1 个余量给 dynamic 注入,如长 observation 摘要)
-
-```typescript
-// ClaudeAgentSdkHarness.sendMessage 伪代码
-async sendMessage(text: string) {
-  const history = await this.loadHistoryWithCacheControl()  // 读 messages.jsonl + 打 cache_control
-  return query({
-    messages: [...history, { role: 'user', content: text }],
-    system: [{ text: this.systemPrompt, cache_control: { type: 'ephemeral' } }],
-    tools: this.tools,           // 工具数组结尾打一个 cache_control
-    cwd: this.sandbox.cwd,
-    canUseTool: ...,
-    // 不传 resume —— 历史由 messages.jsonl 自管
-  })
-}
-```
-
-**TTL 选择**:默认 `ephemeral`(5min);若已 dogfood 验证某 prefix 跨小时复用频繁,再升级到 `extended`(1h)。
-
-**为什么不直接用 SDK resume** — SDK resume 帮你管的本质就是"哪几个位置贴 cache_control",但隐藏了控制点;Option A 暴露断点位置后,可控、可解释、可跨 provider(Anthropic API / OpenAI prompt cache 同样思路)。
-
-#### 目录组织
-
-```
-src/main/agent/
-├── runtime/                    三件套 façade
-│   ├── workspace.ts            app 端 Workspace 数据模型(已有,原 session.ts)
-│   ├── sandbox.ts              Sandbox 接口 + LocalFsSandbox
-│   ├── harness.ts              Harness 接口 + 事件
-│   └── factory.ts              createAgentRuntime
-├── harness/                    各 provider 实现
-│   ├── claude-agent-sdk.ts     Phase 6 起手
-│   ├── anthropic-api.ts        v0.2
-│   └── openai.ts               v0.2+
-├── sandbox/                    各 sandbox 实现
-│   ├── local-fs.ts             MVP
-│   ├── read-only.ts            v1
-│   └── docker.ts               v1+
-└── tools/                      ToolDefinition + builtin tools(通过 sandbox)
-    ├── registry.ts
-    └── builtin/ (shell/file/knowledge)
-```
+完整设计(`AgentConfig` 版本化、`runSession` 主循环、`SessionHooks` Memory 切口、Provider 矩阵 / Prefix cache 策略 / Skill 集成 / monorepo 包结构 / Phase 6 子任务)见 **[03-agent-core.md](03-agent-core.md)**。
 
 ### Tool 契约
 
@@ -651,10 +426,14 @@ silent-agent/
 │   │   │   │   ├── browser.ts          # WebContentsView
 │   │   │   │   ├── terminal.ts         # node-pty
 │   │   │   │   └── file.ts             # fs 操作
-│   │   │   ├── observers/              # 桥接层
-│   │   │   │   ├── browser.ts          # CDP 事件 hook
-│   │   │   │   ├── files.ts            # chokidar
-│   │   │   │   └── shell.ts
+│   │   │   ├── vcs/                    # WorkspaceVCS · workspace 暴露的版本能力
+│   │   │   │   ├── interface.ts        # WorkspaceVCS 接口
+│   │   │   │   ├── git.ts              # simple-git 薄封装
+│   │   │   │   ├── auto-commit.ts      # Tier 1 规则 + IdleTimer
+│   │   │   │   └── events.ts           # events.jsonl append
+│   │   │   ├── snapshots/              # 浏览器 / 终端产物落 fs
+│   │   │   │   ├── browser.ts          # outerHTML + Defuddle → snapshots/NNN.md
+│   │   │   │   └── terminal.ts         # buffer + cmd 切片 → NNN-cmd.log
 │   │   │   ├── connections/            # 外部资源集成(v0.2+ 实装)
 │   │   │   │   └── feishu/
 │   │   │   └── tools/                  # 纯 TS
@@ -767,12 +546,14 @@ window.api = {
 | Node 主进程单线程卡 LLM 流 | harness async + renderer 直接渲染流 |
 | 教学模式 UI 节奏烦 | 第一版每 tool call 一次;dogfood 再调 |
 
-## 关联笔记
+## 关联文档
 
-- [positioning-strategy-v3-workspace.md](positioning-strategy-v3-workspace.md) — 产品定位
-- [mvp-plan.md](mvp-plan.md) — 实施路径(原以 Tauri 写,本篇替换为 Electron + 多 agent 数据模型)
-- [cloud-vs-local-agent.md](cloud-vs-local-agent.md) — 本地/云端分工
-- [observation-channels.md](observation-channels.md) — 观察通道
+- [01-product-vision.md](01-product-vision.md) — 产品定位 / AI-push / 产物哲学
+- [03-agent-core.md](03-agent-core.md) — agent-core 4 层 + `runSession`
+- [05-observation-channels.md](05-observation-channels.md) — 观察通道分层
+- [06-cloud-vs-local-agent.md](06-cloud-vs-local-agent.md) — 本地 / 云端分工
+- [08-vcs.md](08-vcs.md) — 事件流 + git auto-commit + snapshot 子系统
+- [`task.md`](../task.md) — Phase 0-8 实施清单
 
 ## 参考资料
 
@@ -780,5 +561,5 @@ window.api = {
 - [electron-vite](https://electron-vite.org/)
 - [Anthropic TypeScript SDK](https://github.com/anthropics/anthropic-sdk-typescript)
 - [xterm.js](https://xtermjs.org) / [node-pty](https://github.com/microsoft/node-pty)
-- [chokidar](https://github.com/paulmillr/chokidar)
+- [simple-git](https://github.com/steveukx/git-js)
 - [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk)
