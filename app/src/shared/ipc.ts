@@ -40,6 +40,9 @@ export const IPC = {
   FILE_PICK_OPEN: 'file.pickOpen',
   FILE_CREATE_IN_WORKSPACE: 'file.createInWorkspace',
   FILE_LIST_DIR: 'file.listDir',
+
+  // review (MVP: spawn `claude -p` 在 workspace 跑 review)
+  REVIEW_RUN: 'review.run',
 } as const
 
 // 动态 event channel:main → renderer 每个终端的数据流

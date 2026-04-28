@@ -10,6 +10,7 @@ import type {
   AgentMeta,
   ChatMessage,
   CreateWorkspaceArgs,
+  ReviewResult,
   WorkspaceMeta,
   TabMeta,
 } from '../shared/types'
@@ -17,7 +18,7 @@ import type {
 // open tab 的 args,按 type 判别
 type OpenTabArgs =
   | { type: 'browser'; url: string }
-  | { type: 'terminal'; cwd?: string; shell?: string; cols?: number; rows?: number }
+  | { type: 'terminal'; cwd?: string; shell?: string; cols?: number; rows?: number; command?: { file: string; args: string[] } }
   | { type: 'file'; path: string }
 
 // [preload] 这个 api 对象就是 renderer 能看到的 window.api。
@@ -80,6 +81,12 @@ const api = {
       ipcRenderer.invoke(IPC.FILE_LIST_DIR, absPath) as Promise<
         Array<{ name: string; isDir: boolean }>
       >,
+  },
+
+  // Review: spawn `claude -p` 在 workspace 跑 review,返回 markdown 建议 + session id
+  review: {
+    run: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.REVIEW_RUN, workspaceId) as Promise<ReviewResult>,
   },
 
   // 终端相关: renderer ↔ main pty

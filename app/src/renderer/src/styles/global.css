@@ -724,6 +724,74 @@ code, .mono {
   margin-top: 4px;
 }
 
+/* Review button in ss-head */
+.review-btn {
+  margin-left: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.review-btn:hover:not(:disabled) {
+  background: var(--panel);
+  border-color: var(--accent, #4a9eff);
+}
+.review-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Review result card */
+.push-card.error {
+  border-color: rgba(255, 100, 100, 0.5);
+  background: rgba(255, 100, 100, 0.06);
+}
+.push-card.review-result {
+  padding: 0;
+}
+.review-suggestion {
+  padding: 12px 14px 4px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.review-suggestion pre {
+  margin: 0;
+  font-family: -apple-system, system-ui, sans-serif;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text);
+}
+.review-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 12px;
+  border-top: 1px solid var(--border-soft);
+  margin-top: 8px;
+  font-size: 11px;
+}
+.continue-btn {
+  background: var(--accent, #4a9eff);
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.continue-btn:hover { opacity: 0.85; }
+
 .chat {
   flex: 1;
   overflow-y: auto;

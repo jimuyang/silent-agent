@@ -12,6 +12,7 @@ import { registerAgentIpc } from './agent'
 import { registerWorkspaceIpc } from './workspace'
 import { registerTabIpc } from './tab'
 import { registerFileIpc } from './file'
+import { registerReviewIpc } from './review'
 
 export interface IpcDeps {
   registry: AgentRegistry
@@ -28,4 +29,5 @@ export function registerAllIpc(deps: IpcDeps) {
   // tab handler 是全局注册,每个窗口的 TabManager 在 main/index.ts 里 registerTabManager 单独挂入
   registerTabIpc()
   registerFileIpc(deps.storage)
+  registerReviewIpc(deps.storage)
 }

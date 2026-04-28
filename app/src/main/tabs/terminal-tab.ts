@@ -42,6 +42,8 @@ export class TerminalTabRuntime {
     meta: TabMeta,
     /** `tabs/<tid>/buffer.log` 的绝对路径,由 TabManager 传入 */
     private readonly bufferLogPath: string,
+    /** 可选:直接 pty.spawn 的 file + args(取代默认 shell),用于 `claude --resume` 这种场景 */
+    customCommand?: { file: string; args: string[] },
   ) {
     this.meta = meta
     const state = (meta.state as TerminalTabState | null) ?? {
@@ -53,13 +55,26 @@ export class TerminalTabRuntime {
 
     meta.state = state
 
-    this.proc = pty.spawn(state.shell, [], {
-      name: 'xterm-256color',
-      cols: state.cols,
-      rows: state.rows,
-      cwd: state.cwd,
-      env: process.env as { [key: string]: string },
+    // 默认走 shell;如果有 customCommand,直接 pty.spawn 那个进程(不进 shell)
+    const procFile = customCommand?.file ?? state.shell
+    const procArgs = customCommand?.args ?? []
+    console.log('[terminal-tab] pty.spawn', {
+      procFile, procArgs, cwd: state.cwd, hasCustom: !!customCommand,
+      PATH: process.env.PATH,
     })
+
+    try {
+      this.proc = pty.spawn(procFile, procArgs, {
+        name: 'xterm-256color',
+        cols: state.cols,
+        rows: state.rows,
+        cwd: state.cwd,
+        env: process.env as { [key: string]: string },
+      })
+    } catch (e) {
+      console.error('[terminal-tab] pty.spawn failed:', e)
+      throw e
+    }
 
     // 打开 buffer.log 落盘流(append 模式),异步建父目录
     mkdir(dirname(bufferLogPath), { recursive: true })

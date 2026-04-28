@@ -72,4 +72,5 @@
 
 - 创建:2026-04-16
 - 最新文档归并:2026-04-27(8 篇核心 + archive 历史)
-- 阶段:Phase 1-4 ✅(壳 + 三件套 tab)、Phase 5 🔄 进行中(journal + git auto-commit + snapshot 子系统)
+- 阶段:Phase 1-4 ✅(壳 + 三件套 tab)、Phase 5 🔄 进行中(WorkspaceVCS + git auto-commit + snapshot 子系统)
+- **MVP 加速捷径**:Phase 6 起 chat / review agent 先用 **Claude Code subprocess** 跑起来(详见 `task.md` 头部说明);设计文档保持目标态不动,03-agent-core.md 等到 v1+ 真有跨 provider / 上云需求时回归

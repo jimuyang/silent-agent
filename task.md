@@ -7,6 +7,8 @@
 > 数据模型按多 agent 设计,MVP 单 window 单 default agent。
 >
 > 设计真相源:[`design/_Index.md`](design/_Index.md);代码锚 [`design/02-architecture.md`](design/02-architecture.md),Phase 5 实施依据 [`design/08-vcs.md`](design/08-vcs.md),Phase 6 实施依据 [`design/03-agent-core.md`](design/03-agent-core.md)。
+>
+> **MVP 加速通道**:Phase 6 起 chat / review agent **先用 Claude Code subprocess 跑起来**(每 workspace 一个长驻 CC session,review = `claude -p --resume` inject,chat = 同 session interactive),03-agent-core.md 整套抽象作为 v1+ 目标态。设计文档不改,实施时按这条捷径走通后再决定是否回到自研 agent-core。
 
 ---
 

@@ -8,7 +8,7 @@ export interface UseTabsResult {
   activeTab: TabMeta | null
   setActiveTabId: (id: string | null) => void
   openBrowser: (url: string) => Promise<TabMeta>
-  openTerminal: (cwd?: string) => Promise<TabMeta>
+  openTerminal: (cwd?: string, command?: { file: string; args: string[] }) => Promise<TabMeta>
   openFile: (path: string) => Promise<TabMeta>
   close: (tabId: string) => Promise<void>
   navigate: (tabId: string, url: string) => Promise<void>
@@ -67,9 +67,9 @@ export function useTabs(workspaceId: string | null): UseTabsResult {
   )
 
   const openTerminal = useCallback(
-    async (cwd?: string) => {
+    async (cwd?: string, command?: { file: string; args: string[] }) => {
       if (!workspaceId) throw new Error('no active workspace')
-      const tab = await ipc.tab.open(workspaceId, { type: 'terminal', cwd })
+      const tab = await ipc.tab.open(workspaceId, { type: 'terminal', cwd, command })
       await reload()
       setActiveTabId(tab.id)
       return tab

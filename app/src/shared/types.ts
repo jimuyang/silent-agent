@@ -139,3 +139,13 @@ export interface ConnectionStatus {
   connected: boolean
   capabilities: Array<{ kind: string; mode: ConnectionMode }>
 }
+
+// ============ Review (MVP: spawn `claude -p`) ============
+
+export interface ReviewResult {
+  ok: boolean
+  sessionId?: string        // CC session id, 后续 --resume 用
+  suggestion?: string       // CC 输出的 markdown 建议(最终 result)
+  error?: string
+  durationMs?: number
+}

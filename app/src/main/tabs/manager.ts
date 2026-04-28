@@ -38,6 +38,12 @@ export interface OpenTerminalArgs {
   shell?: string
   cols?: number
   rows?: number
+  /**
+   * 可选:用 customCommand 替代 shell 启动 pty。MVP 场景:
+   *   { file: 'claude', args: ['--resume', sessionId] }
+   * 让 review 之后的 chat 直接进 CC 续接会话。
+   */
+  command?: { file: string; args: string[] }
 }
 
 export interface OpenFileArgs {
@@ -77,6 +83,7 @@ export class TabManager {
   }
 
   async open(workspaceId: string, args: OpenTabArgs): Promise<TabMeta> {
+    console.log('[TabManager.open]', workspaceId, JSON.stringify(args))
     let meta: TabMeta
     if (args.type === 'browser') {
       const id = newTabId('browser')
@@ -101,11 +108,15 @@ export class TabManager {
         rows: args.rows || 30,
       }
       const id = newTabId('terminal')
+      // 标题:custom command 时显示命令名(`claude` / `python` 等),否则显示 cwd
+      const title = args.command
+        ? `${args.command.file}${args.command.args[0] ? ` · ${args.command.args.slice(0, 2).join(' ')}` : ''}`
+        : `Terminal · ${state.cwd.replace(process.env.HOME || '', '~')}`
       meta = {
         id,
         workspaceId,
         type: 'terminal',
-        title: `Terminal · ${state.cwd.replace(process.env.HOME || '', '~')}`,
+        title,
         path: tabRelPath(id),                  // .silent/tabs/<id>(Phase 5c buffer.log + 后续 snapshots)
         state,
       }
@@ -133,7 +144,8 @@ export class TabManager {
       throw new Error(`tab type not supported yet: ${(args as { type: string }).type}`)
     }
 
-    const runtime = await this.createRuntime(workspaceId, meta)
+    const customCommand = args.type === 'terminal' ? args.command : undefined
+    const runtime = await this.createRuntime(workspaceId, meta, { customCommand })
     this.ensureBucket(workspaceId).set(meta.id, runtime)
 
     await this.persist(workspaceId)
@@ -296,7 +308,11 @@ export class TabManager {
     return null
   }
 
-  private async createRuntime(workspaceId: string, meta: TabMeta): Promise<TabRuntime> {
+  private async createRuntime(
+    workspaceId: string,
+    meta: TabMeta,
+    opts?: { customCommand?: { file: string; args: string[] } },
+  ): Promise<TabRuntime> {
     if (meta.type === 'browser') {
       const rt = new BrowserTabRuntime(this.window, meta)
       rt.onTitleChanged = () => this.persist(workspaceId).catch(console.warn)
@@ -309,7 +325,9 @@ export class TabManager {
     if (meta.type === 'terminal') {
       const wsPath = await this.storage.resolveWorkspacePath(this.agentId(), workspaceId)
       const bufferLogPath = join(P.workspaceTabDir(wsPath, meta.id), 'buffer.log')
-      const rt = new TerminalTabRuntime(this.window, meta, bufferLogPath)
+      // customCommand 是 transient 选项,不进 meta 也不持久化:仅首次 spawn 时使用。
+      // 重启 app 后 restoreWorkspace 走默认 shell(CC 会话上下文已经在 ~/.claude 里, 用户重新跑命令即可恢复)
+      const rt = new TerminalTabRuntime(this.window, meta, bufferLogPath, opts?.customCommand)
       rt.onWorkspaceEvent = (evt) => {
         this.emit(workspaceId, { ...evt, tabId: meta.id }).catch(() => {})
       }
