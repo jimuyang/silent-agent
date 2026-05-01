@@ -147,6 +147,33 @@ MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 
 ---
 
+## 按需 — TabBar tab 宽度可拖动
+
+每个 tab 当前固定宽度(title 截断 ellipsis)。dogfood 时遇到长 URL / 命令名看不全的情况,需要拖动边界放宽。
+- [ ] 每个 tab 之间的边界加 4-6px 的拖动 handle(`cursor: col-resize`)
+- [ ] 拖动时实时调整两侧 tab 的宽度,主要扩大被拖的左侧 tab
+- [ ] 单 tab 宽度限制:`min-width: 80px` / `max-width: 480px`
+- [ ] 双击边界 → 自动 fit 到 title 完整宽度
+- [ ] 状态持久化到 `tabs.json` 里的 `tabWidth?: number`(per-tab,可选)
+- [ ] 关 tab 时该 tab 的宽度配额释放给左邻
+- [ ] 跟 Tab Bar 总宽度的关系:tab 总宽度超出 TabBar 时启用横向滚动 / overflow scroll(已有?需验证)
+
+---
+
+## 按需 — LeftNav 收窄到 icon-only 模式
+
+LeftNav 当前是 180px 宽(打开 file tree 时窄到 100px)。dogfood 体感主区不够宽,LeftNav 信息量有冗余。需要一个更激进的 icon-only 模式。
+- [ ] 新增"超窄模式":LeftNav 收窄到约 48px,只显示 icon + 数字徽章
+- [ ] icon 列表:消息渠道 / 飞书 IM / 邮箱 / 工作流 / 日程 / TODO / 知识库 / Skills / Memory / Preferences / 工作区列表
+- [ ] hover icon 弹气泡或 tooltip 显示 label
+- [ ] 工作区列表区域:icon 用 workspace name 首字 + 右下角 active 小绿点
+- [ ] 切换模式:LeftNav 顶部一个折叠按钮(`«` / `»`),或快捷键 `Cmd+\\`
+- [ ] 状态持久化到 `.silent/runtime/state/layout.json`(workspace 级)或 app 级 preference
+- [ ] active workspace 高亮、push 数字徽章这两个不能丢
+- [ ] 跟现有 narrow 模式(file tree open 时 100px)的关系:保留三档 — 默认 180px / 文件树打开 100px / 用户折叠 48px
+
+---
+
 ## 按需 — Tab 拖出独立 window
 
 把任意 tab(浏览器 / 终端 / 文件 / 主 chat)拖出 TabBar 变成一个独立 BrowserWindow,可以多屏摆放;拖回来重新归入原 workspace。
@@ -159,12 +186,36 @@ MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 
 ---
 
+## 按需 — 分栏一等抽象 + SilentChat 统一
+
+> **核心**:把"分栏"提升为一等机制 —— 任意 tab 可以"向右分栏出"另一个 tab。**SilentChat 不再是 hardcoded B 模式,而是"workspace 默认在右分栏槽固定一个 silent-chat tab"** —— 跟其他 tab 一视同仁。
+
+现状(Level 0):App.tsx 里 `if (activeTab.type === 'silent-chat') 全宽 else 1.3:1 split + SilentChat 永远在右`,纯 UI 派生规则,没有数据模型。
+
+### 目标(分栏作为一等公民)
+- [ ] tabs.json schema 加 `splitWith?: tabId` 字段:某个 tab 显式声明"我活跃时,把 X tab 在右分栏出来"
+- [ ] silent-chat tab 默认 `splitWith` 自己(workspace 创建时种下),但用户可改:
+  - 拖 silent-chat tab 出去 → 不再分栏,SilentChat 作为普通 tab 占活跃区
+  - 拖任意 tab 到分栏槽 → 把那个 tab 设为该 workspace 的"右分栏 pinned"
+- [ ] App.tsx 的 ActiveTabPane 简化:不再 hardcode `<SilentChat>`,而是读 `activeTab.splitWith` → 渲染对应 tab 内容
+- [ ] silent-chat tab 失去特殊性:就是一个 type='silent-chat' 的普通 tab,可以被关、可以被拖出独立 window(配合拖出 task)、可以被替换
+
+### 进一步(分栏树,Level 2)
+- [ ] `layout.json: { tree: LayoutNode }` — 递归 split 树(类似 VSCode editor groups)
+- [ ] 任意 tab 可拖入任意 split,横纵皆可,可嵌套
+- [ ] 关 tab 时 empty pane 自动折叠
+- [ ] 键盘快捷键:`Cmd+\` 纵 split / `Cmd+Shift+\` 横 split
+
+→ 实现 Level 2 后,"SilentChat hardcoded right" 自然消失 —— 只是 tree 里默认有一个右子叶子是 silent-chat tab。
+
+---
+
 ## 按需 — 分栏升级(Level 1 / Level 2)
 
 详见 `design/02-architecture.md` 的"分栏演进路线"。v0.1 默认停在 Level 0(hardcoded B 模式 1.3:1)。
 
 ### Level 1(约 2h,触发:dogfood 发现要调比例)
-- [ ] `<workspace>/.silent/state/layout.json` — `{ splitRatio: 0~1 }`(.gitignore)
+- [ ] `<workspace>/.silent/runtime/layout.json` — `{ splitRatio: 0~1 }`(.gitignore,在 runtime/)
 - [ ] IPC:`layout.getRatio / setRatio`
 - [ ] divider 加拖动 handler,默认值 0.56(等价 1.3:1)
 
@@ -176,18 +227,117 @@ MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 
 ---
 
+## 按需 — Clipboard 行为捕获(workspace 内,跨 tab 流向)
+
+> **价值**:用户从 logservice 复制 abc123 → 1 分钟后粘到 chat 问 agent —— 揭示用户的关键 ID / 思维链。比纯 events 多一层"内容流向"。
+> **隐私红线**:**默认仅抓元数据**(length / sourceTab / targetTab / sourceHost),内容默认不存;用户 settings opt-in 才存内容。**workspace 边界外的剪贴板一概不碰**(违反观察边界红线)。
+> **实施 phase**:Phase 7(用作 pattern mining / 教教我信号)或 v0.2(独立增强)。
+
+### 注入点
+- [ ] **BrowserTabRuntime**:`executeJavaScript` 注入 `document.addEventListener('copy'/'paste', listener, true)`
+  - copy 拿 `e.clipboardData.getData('text/plain').length` + `location.host` + 选中区 selector(粗粒度,role+tag)
+  - paste 拿 length + 目标 element role
+  - 通过 preload 暴露的 IPC 回调到主进程 → `vcs.emit({source:'user', action:'clipboard.copy'/'paste', ...})`
+- [ ] **TerminalTabRuntime**(包括主 chat ChatTerminal):
+  - `term.onSelectionChange` → 用户选区 length(copy 候选信号)
+  - 检测 bracketed paste(`\x1b[200~...\x1b[201~` 包裹)→ paste event,知道粘贴大小
+  - 同 emit 进 events.jsonl
+- [ ] **FilePane Monaco**:
+  - `editor.onDidPaste(e)` → 直接拿 paste 范围 + 长度
+  - DOM `copy` listener → 选区文本 length
+- [ ] 全部走 vcs.emit 统一进 events.jsonl(2 层 schema · Layer 1)
+
+### 默认 events.jsonl 行(只元数据)
+```jsonl
+{"ts":"...","source":"user","action":"clipboard.copy","tabId":"br-1","meta":{
+  "summary":"copy 142 chars from logservice.bytedance.net",
+  "length":142,"contentType":"text/plain",
+  "sourceHost":"logservice.bytedance.net","sourceSelector":"td.log-content"
+}}
+{"ts":"...","source":"user","action":"clipboard.paste","tabId":"term-x","meta":{
+  "summary":"paste 142 chars to terminal",
+  "length":142,"targetTabId":"term-x"
+}}
+```
+
+### 跨 tab 流向 link(高价值推理)
+- [ ] copy / paste 元数据有 length 字段 → review / pattern detector 能跨 tab join:`copy at T0 length=142 from br-1` + `paste at T1 length=142 to term-x` → 强推断用户做了 br-1 → term-x 的内容搬运
+- [ ] 不存内容也能做这个 join,纯靠 (length, ts gap)。MVP 接受偶尔误判
+
+### opt-in 存内容(默认关闭)
+- [ ] App settings 加 `captureClipboardContent: boolean`(per-workspace 或全局)
+- [ ] 启用后:内容入 `.silent/runtime/clipboard.jsonl`(独立 stream,不进 events.jsonl)
+- [ ] events 行 `meta.detailMessageId` 引用 clipboard.jsonl 中的 id
+- [ ] 7 天 TTL 自动清理(防 token / 密码长留)
+- [ ] 用户 UI 提示:"剪贴板内容已记录,7 天后自动清理"
+
+### 不抓(workspace 边界外)
+- ❌ 跨 app 复制:从外部 Chrome 复制 → 粘到我们的内嵌浏览器(粘贴端能抓,复制端不可见 —— 自然约束)
+- ❌ 跨 app 粘贴:从我们复制 → 粘到 VSCode(复制端能抓,粘贴端不可见)
+- ❌ 全局剪贴板 polling(NSPasteboard)—— 违反观察边界红线
+- ❌ 用户在 SilentAgent 之外的任何剪贴板事件
+
+---
+
+## 按需 — Recording 模式(教教我密集观察)
+
+> **价值**:用户主动开启 → 系统在该窗口期内**加密观察**(snapshot 频率上调 + click/keypress 落 events),退出时把 dense events 喂给 main_review 直接产 skill 候选。是「人教 AI」的最小可控接口,跟当前"AI-push 静默观察"路径互补。
+> **隐私红线**:开启状态有醒目 UI 标识(red dot);窗口期外行为不变;**仍不跨越 workspace 边界**。
+> **实施 phase**:Phase 7(教教我闭环升级)或 v0.2 独立功能;先观察 dogfood 是否真有需求再上。
+
+### 触发与生命周期
+- [ ] LeftNav / TabBar 加 `● Recording` 按钮,点亮后开启
+- [ ] 默认 5 分钟 / idle 60s / 用户手动停 三种退出条件
+- [ ] 录制态写 `.silent/runtime/state/recording.json`(per-workspace),录制 id `<rid>`
+- [ ] 红色 UI 标识(跟"录屏"心智一致)
+
+### 增强观察(录制态下,常规态不变)
+- [ ] **浏览器 snapshot 频率上调**:常规态 = `did-finish-load + did-navigate-in-page`(500ms 等渲染);录制态 = 加 click / keydown 触发(debounce 800ms 抓 ariaSnapshot)
+- [ ] **终端 snapshot 频率上调**:每条 cmd 切片照常,加 buffer.log 内的 `--- recording <rid> tick ---` 标记
+- [ ] **高频元数据 events**:bracketed paste / quick selection / clipboard 走 events.jsonl(参考「按需 — Clipboard 行为捕获」)
+- [ ] **可选截图**:每个 snapshot 配 PNG(`runtime/tabs/<tid>/recordings/<rid>/NNN.png`),给 LLM 视觉锚点
+
+### 数据模型
+- [ ] `events.jsonl` 加可选字段 `meta.recordingId?: string` 标记隶属哪段录制
+- [ ] 录制产物落 `runtime/tabs/<tid>/recordings/<rid>/NNN-*.md`(跟常规 snapshots 物理分离,不污染历史序列)
+- [ ] `runtime/recordings/_index.json` 记当前 / 历史录制(start/end ts、产物路径、关联 skill 候选)
+
+### 退出后处理
+- [ ] 停录自动调起 main_review,prompt 限定到 `recordingId == <rid>` 的事件 + 产物
+- [ ] main_review 优先输出 [09-learning-loop](design/09-learning-loop.md) §7 的 `create_skill` action
+- [ ] 用户 review 候选 skill,接受后存 `agents/<aid>/skills/<name>.yaml`
+
+### 不做
+- ❌ 屏幕录像(对齐 [05-observation-channels](design/05-observation-channels.md) P2 永远不做)
+- ❌ 全局键盘 hook(只监听 webContents / pty 内,workspace 边界内)
+- ❌ 自动开启 / 长跑(用户必须显式触发)
+
+### 关联
+- [09-learning-loop](design/09-learning-loop.md) — main_review 4 向 action,recording 产物天然走这条
+- 按需 — Clipboard 行为捕获(信号源同一类)
+- Phase 7 教教我 + Skill v1(本节是其增强模式)
+
+---
+
 ## Phase 5 — Workspace 化 · WorkspaceVCS + snapshot 子系统(~4d)🔄
 
 > **依据**:[`design/08-vcs.md`](design/08-vcs.md)。
 > **核心思想**:**workspace = 一个 git repo,workspace 版本 = git commit SHA**。`WorkspaceVCS` 是 workspace 同级的能力对象,提供 `emit / commit / log / diff / show / status / branch / checkout`。应用内 module(TabManager / BrowserTabRuntime / TerminalTabRuntime / ChatSession)主动调 `vcs.emit(...)` 写 events.jsonl + 在边界自动 commit。**不监听用户外部文件编辑**(无 chokidar),用户文件改动由下次 trigger 时 `git status` 懒发现。
 
-### 已就绪(Phase 1-4 顺手完成的)
+> **实施顺序**(2026-04-28 调整):**snapshot 先于 git** —— 5d / 5e 先做(产出 latest.md / latest-cmd.log,即使没 git 也是 main_chat / review 的"current truth"),再做 5b(WorkspaceVCS + simple-git + Tier 1)。**5c+ 目录迁移已完成**(2026-04-28 commit a6a2c13)。
+>
+> **顺序**:**5d → 5e → 5b → 5a(融入 5b)→ 5f → 5g**
+
+### 已就绪(Phase 1-4 顺手完成的 + 这一轮 commit)
 - [x] TabMeta.path 一等字段 + `.silent/` 路径前缀
 - [x] `src/main/storage/events.ts` — `appendEventAt(wsPath, evt)`(Phase 5 搬到 `vcs/events.ts`)
 - [x] `LocalFsAdapter.appendEvent(agentId, wid, evt)`
 - [x] TabManager emit `tab.open / close / focus`
 - [x] BrowserTabRuntime emit `did-navigate / did-finish-load`
 - [x] TerminalTabRuntime emit `pty-exit`
+- [x] **5c+ 目录结构迁移到 `.silent/runtime/` 子目录(commit a6a2c13)**
+- [x] `shared/consts.ts` 二分常量(RUNTIME_DIR / MAIN_CHAT / TAB_LATEST_*) + 路径迁移工具
+- [x] `LocalFsAdapter.ensureLayoutMigrated`(per-process per-wsPath idempotent)+ `mergeJsonlPrepend`(jsonl race 合并)
 
 ### 5a · `vcs/` module 骨架 + WorkspaceVCS 接口(0.5d)
 - [ ] `app/src/main/vcs/interface.ts` — `WorkspaceVCS { emit / commit / branch / checkout / status / log / diff / show / dispose }` + `EventSource` / `AutoCommitRule` / `CommitInfo` / `FileStatus` 类型
@@ -269,6 +419,15 @@ MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 - [ ] `meta.yaml.linkedFolder` 字段(已有)
 - [ ] IdleTimer 触发 `workspace.idle` 时,如果有 linkedFolder 顺手 probe HEAD + dirty → `vcs.emit({source:'linked', action:'probe', ...})`
 - [ ] linkedFolder 路径**自动**加进 workspace `.gitignore`
+
+### 5h · 现有 emit 点补 events 2 层 schema(0.5d)
+> 设计依据:[`design/02-architecture.md`](design/02-architecture.md) "Events 2 层结构(强约定)"。
+> 现有 emit 点(TabManager / BrowserTabRuntime / TerminalTabRuntime)的 meta 字段还是 `{type, url, exitCode}` 这种结构化短字段,**没有 `summary` 一行简介**。补齐让 LLM scan timeline 有人类可读 hint。
+- [ ] `tab.open` / `close` / `focus` emit 加 `meta.summary`(如 `"open browser to logservice"` / `"focus → silent-chat"`)
+- [ ] `browser.navigate / load-finish` 加 summary + `meta.detailPath`(指向 snapshots/NNN-*.md, Phase 5d 一起)
+- [ ] `shell.exec / exit` 加 summary + `meta.detailPath`(指向 NNN-cmd.log, Phase 5e 一起)
+- [ ] `linked.probe` 加 summary
+- [ ] 验收:每条 events.jsonl < 1KB,LLM 只读 `summary` 也能理解大概发生了啥
 
 ### 验收
 - [ ] 新建 workspace → `<wsPath>/.git/` 存在 + initial commit
@@ -393,6 +552,27 @@ MVP 目前只显示 URL 文本 tab + 网页本体,没有 chrome 工具栏。
 
 - [ ] **权限策略**:MVP 全部 allow(`acceptEdits`);v0.2 加 `--allowed-tools` 白名单 + per-tool 用户确认 hook
 - [ ] 主进程关 workspace 时:停 MCP server 相关 binding(避免野进程读资源)
+
+### 6k · main_chat 对话流同步到 main_chat.jsonl(0.5d)
+> **当前状态**:ChatRuntime 跑 `claude` interactive,raw pty 流写到 buffer 但没结构化解析成 turn。`main_chat.jsonl` 文件路径已就绪(commit a6a2c13)但**还是空文件**。
+> **目标**:让 main_chat.jsonl 真正成为对话 truth file,events.jsonl 中 chat.* 事件能 messageId 引用进去。
+- [ ] 用 CC 的 `SessionStop` hook(配置在 `~/.claude/settings.json` 或 workspace 级 `.claude/settings.json`)
+  - hook 是 shell command,在 CC interactive session 结束时被调
+  - hook 调用 silent-agent 的 IPC 把 CC session.jsonl 同步到 workspace 的 main_chat.jsonl
+- [ ] 或备选:CC 的 `--include-hook-events` + stream-json 输出格式(只 `--print` 模式有,interactive 不行)
+- [ ] ChatRuntime 在每次 spawn 时把 hook 命令注入到 CC config
+- [ ] 同步逻辑:增量 append(`tail` CC 的 session.jsonl 新行 → write to workspace's main_chat.jsonl)
+- [ ] 每条 message 的 id 保留(供 events.jsonl `meta.messageId` 引用)
+- [ ] 验收:用户跟主 chat 对话后,`.silent/runtime/main_chat.jsonl` 有内容 + 每条有 id
+
+### 6l · chat.* events 落 events.jsonl(0.5d)
+> 设计依据:design/02-architecture.md events 2 层 schema · chat 用 messageId 引用 main_chat.jsonl
+> **当前状态**:events.jsonl 中没有 chat.* 事件,因为 ChatRuntime 不知道 turn 边界。
+- [ ] CC SessionStop hook(同 6k)在每次 turn 结束时回调主进程
+- [ ] 主进程 emit `vcs.emit({source:'chat', action:'turn-end', meta:{summary, messageId, turnDurMs}})`
+- [ ] (备选)从 main_chat.jsonl 增量 detect 新 message + 推断 user / assistant turn,emit 进 events
+- [ ] 4 类 chat events 都补:user-turn / tool-use / tool-result / assistant-turn / turn-end
+- [ ] 验收:跟主 chat 一来一回 → events.jsonl 多 5 条 chat.* + main_chat.jsonl 多 4 条 message
 
 ### 验收(6j 部分)
 - [ ] CC subprocess 启动后能 list 所有 silent_agent 提供的 tool
