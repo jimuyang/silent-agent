@@ -10,10 +10,12 @@ import * as pty from 'node-pty'
 import type { BrowserWindow } from 'electron'
 import { createWriteStream, WriteStream } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 
 import type { TabMeta, TerminalTabState } from '@shared/types'
 import { ptyChannel } from '@shared/ipc'
+import { TerminalSnapshotter } from '../snapshots/terminal'
+import { ensureZshIntegration } from '../snapshots/zsh-integration'
 
 const DEFAULT_SHELL = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh')
 const BUFFER_MAX_BYTES = 256 * 1024
@@ -29,6 +31,9 @@ export class TerminalTabRuntime {
   // 落盘 buffer.log: pty 所有 stdout 同步 append(供外部 tail -f / agent 读)
   private bufferLogStream: WriteStream | null = null
 
+  /** Phase 5e: per-cmd snapshot 子系统(zsh integration 注入 OSC 标记切边界) */
+  private snapshotter: TerminalSnapshotter | null = null
+
   /** 由 manager 注入,pty 退出等事件发给 workspace 级 events.jsonl */
   onWorkspaceEvent?: (evt: {
     source: 'shell'
@@ -42,6 +47,8 @@ export class TerminalTabRuntime {
     meta: TabMeta,
     /** `tabs/<tid>/buffer.log` 的绝对路径,由 TabManager 传入 */
     private readonly bufferLogPath: string,
+    /** workspace 根绝对路径,由 TabManager 传入 —— snapshotter 计算 latest-cmd.log / NNN 切片路径用 */
+    wsPath: string,
     /** 可选:直接 pty.spawn 的 file + args(取代默认 shell),用于 `claude --resume` 这种场景 */
     customCommand?: { file: string; args: string[] },
   ) {
@@ -58,8 +65,19 @@ export class TerminalTabRuntime {
     // 默认走 shell;如果有 customCommand,直接 pty.spawn 那个进程(不进 shell)
     const procFile = customCommand?.file ?? state.shell
     const procArgs = customCommand?.args ?? []
+
+    // Phase 5e: zsh shell integration —— ZDOTDIR 让 zsh 加载我们的 .zshrc(其内会先 source ~/.zshrc),
+    // 在 preexec / precmd 上挂 OSC 133/633 hook,主进程从 pty stdout 解析切命令边界。
+    // 只对 zsh 启用;bash / fish / customCommand(非 shell)都不注入,保留原生行为。
+    const isInteractiveZsh =
+      !customCommand && (procFile.endsWith('/zsh') || basename(procFile) === 'zsh')
+    const env: NodeJS.ProcessEnv = isInteractiveZsh
+      ? { ...process.env, ZDOTDIR: ensureZshIntegration() }
+      : { ...process.env }
+
     console.log('[terminal-tab] pty.spawn', {
       procFile, procArgs, cwd: state.cwd, hasCustom: !!customCommand,
+      shellIntegration: isInteractiveZsh,
       PATH: process.env.PATH,
     })
 
@@ -69,7 +87,7 @@ export class TerminalTabRuntime {
         cols: state.cols,
         rows: state.rows,
         cwd: state.cwd,
-        env: process.env as { [key: string]: string },
+        env: env as { [key: string]: string },
       })
     } catch (e) {
       console.error('[terminal-tab] pty.spawn failed:', e)
@@ -83,11 +101,22 @@ export class TerminalTabRuntime {
       })
       .catch((e) => console.warn('[terminal] open buffer.log', e))
 
+    if (isInteractiveZsh) {
+      this.snapshotter = new TerminalSnapshotter(wsPath, meta.id)
+    }
+
     this.proc.onData((chunk: string) => {
       this.pushBuffer(chunk)
       this.bufferLogStream?.write(chunk)
       if (!this.window.isDestroyed()) {
         this.window.webContents.send(ptyChannel.data(meta.id), chunk)
+      }
+      if (this.snapshotter) {
+        const events = this.snapshotter.feed(chunk)
+        for (const ev of events) {
+          // emit 是 fire-and-forget;exit 事件需要先写 snapshot 再 emit(meta.detailPath 由 snapshot 给)
+          void this.handleCmdEvent(ev)
+        }
       }
     })
 
@@ -102,6 +131,58 @@ export class TerminalTabRuntime {
       })
       this.bufferLogStream?.end()
       this.bufferLogStream = null
+    })
+  }
+
+  /**
+   * Phase 5e: 处理 snapshotter 抛出的命令边界事件。
+   *  - preexec: emit shell.exec(只 emit,不写文件)
+   *  - exit:   写 NNN.log + cp latest-cmd.log,emit shell.exit(含 summary + detailPath)
+   * 失败 fallback 到 emit 不带 detailPath 的事件,timeline 仍记录命令发生过。
+   */
+  private async handleCmdEvent(
+    ev: { kind: 'preexec'; cmd: string } | {
+      kind: 'exit'
+      cmd: string
+      exitCode: number
+      durMs: number
+      bufferContent: string
+    },
+  ): Promise<void> {
+    if (!this.snapshotter) return
+    if (ev.kind === 'preexec') {
+      this.onWorkspaceEvent?.({
+        source: 'shell',
+        action: 'exec',
+        target: ev.cmd,
+        meta: { summary: `exec: ${ev.cmd.slice(0, 80)}` },
+      })
+      return
+    }
+    // ev.kind === 'exit'
+    const snap = await this.snapshotter.writeSnapshot({
+      cmd: ev.cmd,
+      exitCode: ev.exitCode,
+      durMs: ev.durMs,
+      content: ev.bufferContent,
+    })
+    this.onWorkspaceEvent?.({
+      source: 'shell',
+      action: 'exit',
+      target: ev.cmd,
+      meta: snap
+        ? {
+            summary: snap.summary,
+            detailPath: snap.detailPath,
+            cmd: ev.cmd,
+            exitCode: ev.exitCode,
+            durMs: ev.durMs,
+          }
+        : {
+            cmd: ev.cmd,
+            exitCode: ev.exitCode,
+            durMs: ev.durMs,
+          },
     })
   }
 

@@ -375,7 +375,7 @@ export class TabManager {
       const bufferLogPath = join(P.workspaceTabDir(wsPath, meta.id), 'buffer.log')
       // customCommand 是 transient 选项,不进 meta 也不持久化:仅首次 spawn 时使用。
       // 重启 app 后 restoreWorkspace 走默认 shell(CC 会话上下文已经在 ~/.claude 里, 用户重新跑命令即可恢复)
-      const rt = new TerminalTabRuntime(this.window, meta, bufferLogPath, opts?.customCommand)
+      const rt = new TerminalTabRuntime(this.window, meta, bufferLogPath, wsPath, opts?.customCommand)
       rt.onWorkspaceEvent = (evt) => {
         this.emit(workspaceId, { ...evt, tabId: meta.id }).catch(() => {})
       }
