@@ -14,7 +14,7 @@
 
 1. **工作区边界 = 观察边界 = 授权边界** — 工作区目录之外不观察，内嵌浏览器以外的 Chrome 不观察，其他终端进程不观察
 2. **元数据 > 内容** — 默认只抓 URL / 时间 / 动作类型 / 命令名，不抓消息 body / 文档正文 / 代码内容 / 命令参数里的敏感字符串
-3. **本地合并** — 各通道事件统一落盘到 `<workspace>/.silent/events.jsonl`,只送**脱敏摘要**给云端 LLM(对应 [06-cloud-vs-local-agent.md](06-cloud-vs-local-agent.md) 的守门人原则)
+3. **本地合并** — 各通道事件统一落盘到 `<workspace>/.silent/runtime/events.jsonl`,只送**脱敏摘要**给云端 LLM(对应 [06-cloud-vs-local-agent.md](06-cloud-vs-local-agent.md) 的守门人原则)
 
 ## 通道分层
 
@@ -40,7 +40,7 @@ flowchart TB
         P22[屏幕录制 / OCR]
     end
 
-    P0 --> AGG[".silent/events.jsonl + git<br/>vcs.emit + Tier 1 auto-commit"]
+    P0 --> AGG[".silent/runtime/events.jsonl + git<br/>vcs.emit + Tier 1 auto-commit"]
     P1 -.可选.-> AGG
     P2 -.-> AGG
 
@@ -116,8 +116,8 @@ office_to_shadow:
 - **导航事件**(`webContents.on('did-navigate' / 'did-finish-load')`)→ URL / title / domain
 - **Network 请求**(`webContents.session.webRequest.onCompleted`)→ `{method, url, status, domain}`(token / Authorization header 永远剥)
 - **用户交互**(`executeJavaScript` 注入 listener,只抓 element role / selector / 位置,**不抓输入内容**)
-- **页面快照**(`did-finish-load` 后 `executeJavaScript('document.documentElement.outerHTML')` → Defuddle 抽干净 → `.silent/tabs/<tid>/snapshots/NNN.md`)
-- 通过 `vcs.emit(...)` 落 `<workspace>/.silent/events.jsonl`(详见 [08-vcs.md](08-vcs.md));`load-finish` 命中 Tier 1 → 1s debounce 后 commit
+- **页面快照**(`did-finish-load` 后 `executeJavaScript('document.documentElement.outerHTML')` → Defuddle 抽干净 → `.silent/runtime/tabs/<tid>/snapshots/NNN.md` + cp 到 `.silent/tabs/<tid>/latest.md`(进 git))
+- 通过 `vcs.emit(...)` 落 `<workspace>/.silent/runtime/events.jsonl`(详见 [08-vcs.md](08-vcs.md));`load-finish` 命中 Tier 1 → 1s debounce 后 commit
 
 **同时具备 act 能力**(给 agent 当 tool):
 - 导航:`webContents.loadURL(url)`
@@ -202,7 +202,7 @@ office_to_shadow:
 
 ## 事件统一 schema(everything is file)
 
-各通道事件汇入 `<workspace>/.silent/events.jsonl`,字段统一(详见 [08-vcs.md](08-vcs.md) Event schema):
+各通道事件汇入 `<workspace>/.silent/runtime/events.jsonl`,字段统一(详见 [08-vcs.md](08-vcs.md) Event schema):
 
 ```jsonl
 {"ts":"2026-04-23T10:32:05Z","source":"fs","action":"save","target":"notes.md","meta":{"size":4321,"ext":"md"}}
@@ -217,7 +217,7 @@ office_to_shadow:
 ```
 🔴 原始内容(消息 body / 文档正文 / 代码 diff / 命令输出)  → 永远不离开设备
 🟡 脱敏摘要("用户在工作区里整理了竞品笔记")              → 可送云端 LLM 做推理
-🟢 产物元数据(文件路径 / URL 域名 / 命令名)              → 可存工作区 .silent/events.jsonl,可 git 追踪
+🟢 产物元数据(文件路径 / URL 域名 / 命令名)              → 可存工作区 .silent/runtime/events.jsonl,可 git 追踪
 🔵 Skill 定义(observe-learn-act schema)                  → 跨设备同步(云端 Sidecar)
 ```
 

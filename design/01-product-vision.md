@@ -359,7 +359,7 @@ flowchart TB
     style A fill:#1a3a5c,color:#fff
 ```
 
-**Observe** —— 内嵌浏览器(Electron `WebContentsView`)/ 终端 hook(node-pty),应用内事件统一通过 `vcs.emit(...)` 落 `<workspace>/.silent/events.jsonl`。用户外部文件编辑由 git 在下次 commit 时懒发现,**不实时监听**。**核心边界**:不观察工作区之外。
+**Observe** —— 内嵌浏览器(Electron `WebContentsView`)/ 终端 hook(node-pty),应用内事件统一通过 `vcs.emit(...)` 落 `<workspace>/.silent/runtime/events.jsonl`(timeline 不进 git,git 只管 workspace 真状态)。用户外部文件编辑由 git 在下次 commit 时懒发现,**不实时监听**。**核心边界**:不观察工作区之外。
 
 **Learn** —— 事件流 → Pattern 检测(MVP 直接 LLM 摘要,后期补 sequence mining)→ "教教我"仪式(结构化 3 问)→ skill yaml 落 `<agent>/skills/`。
 
@@ -372,21 +372,27 @@ flowchart TB
 ```
 <workspace 目录>/
 ├── .silent/                        ← 工作区标识(类比 .git/)
-│   ├── meta.yaml                   工作区配置
-│   ├── messages.jsonl              silent-chat tab 对话全文
-│   ├── events.jsonl                workspace 级单一事件时间线
-│   ├── tabs.json                   tab 索引
-│   ├── tabs/<tid>/                 每个 tab 的产物(snapshots / buffer.log)
-│   └── state/                      运行时状态
-└── <用户的任何文件>                  notes.md / data.csv / src/ / ...
+│   ├── meta.yaml                   ✅ git: 工作区配置
+│   ├── tabs/<tid>/latest.md        ✅ git: browser 当前页面
+│   ├── tabs/<tid>/latest-cmd.log   ✅ git: terminal 最近命令输出
+│   └── runtime/                    ❌ .gitignore: 整目录(logs / cache / 历史)
+│       ├── events.jsonl            timeline log
+│       ├── main_chat.jsonl         main_chat agent 对话流
+│       ├── main_review.jsonl       review agent 对话流
+│       ├── tabs.json               UI 状态
+│       ├── tabs/<tid>/snapshots/   immutable NNN 切片
+│       └── tabs/<tid>/buffer.log   pty raw 流
+└── <用户的任何文件>                   ✅ git: notes.md / data.csv / src/ / ...
 ```
+
+二分约定:`.silent/` 顶层进 git(workspace 真状态),`.silent/runtime/` 整子目录 .gitignore(详见 02-architecture.md / 08-vcs.md)。
 
 带来的性质:
 
 | 性质 | 说明 |
 |---|---|
-| **Git-friendly** | 工作区可以 `git init`,事件历史和产物全进版本控制(详见 02-architecture.md Layer 1/2 commit 策略) |
-| **Rewindable** | 想看三天前 agent 在学什么? `git log .silent/events.jsonl` |
+| **Git-friendly** | workspace 真状态 + 用户文件进 git;timeline / 历史走独立 append-only 流(两轴互补,详见 08-vcs.md) |
+| **Rewindable** | 看产物演进 → `git log -p tabs/<tid>/latest.md`;看时序 → `cat runtime/events.jsonl` |
 | **Debuggable** | Agent 行为异常?直接读 JSONL,不用进数据库 |
 | **Portable** | 换电脑、备份、给同事看,都是拷贝文件夹 |
 | **Scriptable** | grep / jq / sed 就能分析事件流 |

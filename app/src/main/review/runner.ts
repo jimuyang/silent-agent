@@ -1,5 +1,5 @@
 // [main · 桥接层 · 不直接 import 'electron']
-// Review runner:在一个 workspace 目录里跑 `claude -p`,让 CC 自己读 events.jsonl
+// Review runner:在一个 workspace 目录里跑 `claude -p`,让 CC 自己读 .silent/runtime/events.jsonl
 // + 跑 git log,找 pattern 出建议。
 // 每次 review 都是**独立系统调用**(用完即弃),不持久化 session id;
 // "发给主 agent 继续聊"是把 review 的 markdown 文本 inject 进主 agent 的 chat session,
@@ -11,15 +11,26 @@ import type { ReviewResult } from '@shared/types'
 
 const REVIEW_PROMPT = `你正在 review 一个 Silent Agent workspace 的活动记录。
 
+工作区目录布局(参考 design/02-architecture.md 二分约定):
+- .silent/                       ← workspace 真状态(进 git):meta.yaml / tabs/<tid>/latest.md / latest-cmd.log
+- .silent/runtime/               ← 运行时 logs / cache(.gitignore 整目录)
+- .silent/runtime/events.jsonl   ← workspace 时序日志(2 层 Layer 1,append-only)
+- .silent/runtime/main_chat.jsonl    ← main_chat agent 对话流(可能为空)
+- .silent/runtime/main_review.jsonl  ← 之前 review 的对话流(可能为空)
+- .silent/runtime/tabs/<tid>/snapshots/  ← 浏览器/终端 NNN 切片(.md / .log)
+- .silent/tabs/<tid>/latest.md       ← browser tab 当前页面(可看)
+- .silent/tabs/<tid>/latest-cmd.log  ← terminal tab 最近命令输出
+
 可用工具:
-- Read:读 .silent/events.jsonl(workspace 事件流)、.silent/messages.jsonl(对话历史,可能为空)、tabs/*/snapshots/*.md(浏览器/终端快照,如有)
-- Bash:跑 \`git log --oneline -30\` / \`git diff HEAD~10 HEAD\`(如果是 git repo)/ \`ls -la .silent/\`
+- Read:读上面任意文件
+- Bash:跑 \`git log --oneline -30\` / \`git diff HEAD~10 HEAD\`(如果是 git repo)/ \`ls -la .silent/\` / \`ls -la .silent/runtime/\` 等
 
 任务:
-1. 先 \`ls -la .silent/\` 看一下有啥文件
-2. 读 .silent/events.jsonl 看最近的活动
-3. 找重复 pattern(同样命令跑过 3+ 次 / 同站点访问 / 类似查询步骤)
-4. 输出 1-3 条"教教我"建议(skill 候选)
+1. 先 \`ls -la .silent/runtime/\` 看一下有啥文件
+2. Read .silent/runtime/events.jsonl 看最近活动(events 是 2 层结构 — 短 summary + 可选 detailPath/messageId 引用)
+3. 视情况 Read .silent/tabs/<tid>/latest.md 看用户最近在看的页面,Read .silent/tabs/<tid>/latest-cmd.log 看最近终端输出
+4. 找重复 pattern(同样命令跑过 3+ 次 / 同站点访问 / 类似查询步骤)
+5. 输出 1-3 条"教教我"建议(skill 候选)
 
 输出格式(纯 markdown,简洁):
 - 每条建议:**标题**(< 30 字)+ 一句描述 + 为什么值得自动化 + 如果做成 skill 大概几步
