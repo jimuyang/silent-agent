@@ -31,6 +31,8 @@
 - [**02-architecture**](02-architecture.md) — **代码真相源** · 五层架构 / 数据模型 / Workspace = git repo / Tab = `{type, path}` 指针
 - [**03-agent-core**](03-agent-core.md) — **agent-core 包设计** · 4 层(Runtime / AgentRegistry / SessionManager / Sandbox) + `runSession` 核心 loop + Memory hook
 - [**08-vcs**](08-vcs.md) — **WorkspaceVCS** · workspace 暴露的 meta-skill / 4 条 Tier 1 自动 commit 规则 / Browser+Terminal snapshot 子系统
+- [**09-learning-loop**](09-learning-loop.md) — **自进化学习闭环** · 借鉴 Hermes / Nudge 触发反思 / main_review 四向决策 / frozen prompt 不破坏 cache
+- [**10-multi-agent-isolation**](10-multi-agent-isolation.md) — **多 agent 工作区隔离** · git worktree per-agent / `silent/<agent>/<task>` 命名 / WorkspaceVCS 4 方法扩展 / main_chat 当 curator
 
 ### 🎨 交互与观察
 

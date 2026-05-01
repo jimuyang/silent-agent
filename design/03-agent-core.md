@@ -1,5 +1,7 @@
 # Agent Core 技术方案(v0.2)
 
+> **MVP 状态** — MVP 不实现这套自研 harness,改用 **Claude Code 子进程**(`claude -p` / `claude` interactive pty)直接跑 review / main_chat 两条会话(见 [02-architecture.md](02-architecture.md) `chat/` + `review/` 模块)。本文档是 **v1+ 蓝图**:等 MVP 走通、模型/工具策略稳定后再抽 `@silent/agent-core`。文中 `messages.jsonl` 等命名对应 MVP 实现里的 `.silent/runtime/main_chat.jsonl` / `main_review.jsonl`(见 [02-architecture.md](02-architecture.md) 二分约定)。
+
 > **TL;DR** — 抽出独立包 `@silent/agent-core`,Node-only / 零 Electron 依赖。**4 层架构** + 一个核心循环函数:
 >
 > - **Runtime** — 进程级,加载/卸载 Session,并发控制
@@ -104,9 +106,8 @@ silent-agent/
 │   │       │   └── local-fs.ts         # MVP 默认实现(只用 node:fs,不依赖 electron)
 │   │       ├── llm/
 │   │       │   ├── interface.ts        # LLMClient 接口
-│   │       │   ├── claude-agent-sdk.ts
-│   │       │   ├── anthropic-api.ts
-│   │       │   └── openai.ts
+│   │       │   ├── claude-agent-sdk.ts  # 起手:走 Pro/Max 订阅(spawn `claude` binary)
+│   │       │   └── vercel-ai-sdk.ts     # 跨 provider 出口(75+ via `ai` package)
 │   │       ├── tools/
 │   │       │   ├── registry.ts
 │   │       │   └── builtin/            # shell / file / knowledge
@@ -462,12 +463,74 @@ export interface LLMClient {
 
 | Provider | Loop 归属 | Cache 管理 | 适用 |
 |---|---|---|---|
-| `claude-agent-sdk` | SDK 自带 loop(包一层适配) | SDK 内置 | 起手 / 走订阅 |
-| `anthropic-api` | 用我们的 `runSession` | 自管 cache_control | API key / 跨工具共享 prefix |
-| `openai` | 用我们的 `runSession` | OpenAI 自动 | 备选 |
-| `ollama` | 用我们的 `runSession` | 无 | 离线 |
+| `claude-agent-sdk` | SDK 自带 loop(包一层适配) | SDK 内置 | **起手 / 走 Pro/Max 订阅**(spawn `claude` binary,复用 Claude Code OAuth) |
+| `vercel-ai-sdk` | **用我们的 `runSession`** | 各 adapter 透传 `providerOptions` | **跨 provider 统一出口**(75+ provider:Anthropic/OpenAI/Ollama/Google/...) |
 
 **注意**:`ClaudeAgentSdk` 的 SDK 自带 tool loop,我们需要决定是 ① 包一层适配让它兼容 `runSession`(把 SDK 看成更高级的 LLMClient,跳过我们的 dispatchTools),还是 ② 把 SDK 当成"另一个 Runtime 实现",外层不走 `runSession`。Phase 6 起手时实测决定;**初步倾向 ①** —— 让 4 层架构在所有 provider 上保持一致。
+
+### `VercelAiLLMClient` —— 只取 SDK 的 provider 抽象,不要它的 loop
+
+[Vercel AI SDK](https://ai-sdk.dev/) (`ai` npm package) 把 75+ LLM provider 收口到统一接口,本身**自带 tool loop**(`streamText` 内部跑 multi-step)。我们**只取 provider 抽象、不要 loop** —— 用 `stopWhen: stepCountIs(1)` 强制单步:
+
+```typescript
+// packages/agent-core/src/llm/vercel-ai-sdk.ts
+import { streamText, stepCountIs } from 'ai'
+import { anthropic } from '@ai-sdk/anthropic'
+import { openai } from '@ai-sdk/openai'
+
+export class VercelAiLLMClient implements LLMClient {
+  readonly providerName = 'vercel-ai-sdk'
+
+  async create(opts: LLMRequest): Promise<LLMResponse> {
+    const result = streamText({
+      model: this.resolveModel(opts.model),    // 'claude-sonnet-4-6' / 'gpt-4o' / 'ollama/llama3'
+      system: opts.system,
+      messages: opts.messages,
+      tools: opts.tools,
+      stopWhen: stepCountIs(1),                // ★ 单步,把 loop 交回 runSession
+      providerOptions: {
+        anthropic: { cacheControl: { type: 'ephemeral' } },  // cache_control 跨 provider 透传
+      },
+    })
+
+    let text = ''
+    const toolUses: ToolUse[] = []
+    for await (const part of result.fullStream) {
+      if (part.type === 'text-delta') text += part.textDelta
+      if (part.type === 'tool-call')  toolUses.push({ id: part.toolCallId, name: part.toolName, input: part.input })
+    }
+    return {
+      assistantMessage: buildAssistantMessage(text, toolUses),
+      toolUses,
+      finishReason: await result.finishReason, // 由 runSession 映射到 4 路 stopReason
+      usage: await result.usage,
+    }
+  }
+}
+```
+
+**为什么这么切**:
+
+| 我们保留 | SDK 白送 |
+|---|---|
+| `runSession` 命令式 while + 4 路 stopReason 显式枚举 | 75+ provider adapter,加新 provider = 加一行 import |
+| `requires_action` / `retries_exhausted` 中途暂停 + 重入语义 | stream parts 标准化(text-delta / tool-call / reasoning) |
+| `SessionHooks.onSessionStart/End` 在 turn 边界调 | retry / repair tool name / abort signal 内置 |
+| `AgentConfig` 版本化 + Workspace 双面 adapter | usage / cost 统计 + cache_control 跨 provider 透传 |
+
+**为什么不下到 `LanguageModelV2.doStream`**:Vercel 把 `LanguageModelV2` 标为 "Provider Spec"(给做 adapter 的人,不是应用层),minor 版本之间改过接口。`streamText + stepCountIs(1)` 是文档保证的稳定 API。
+
+**为什么不直接用 `streamText` 的 multi-step loop**:会同时丢掉 ① 4 路 stopReason 显式控制(只剩 SDK 内部 `finishReason`)、② `requires_action` 中途暂停语义、③ `SessionHooks` 在 turn 边界注入的时机。这些是 Silent Agent 的产品语义,不能交给 SDK 黑盒。
+
+### Provider 选择策略(Phase 6 起手)
+
+```
+默认 → ClaudeAgentSdkLLMClient(走 Pro/Max 订阅,零 API 计费)
+  ↓ 用户切换 / 配置驱动
+跨 provider → VercelAiLLMClient(API key 计费,任选 75+ provider)
+```
+
+两个 LLMClient **并存**,通过 `AgentConfig.model` 字符串前缀路由(如 `claude:` → ClaudeAgentSdk、`vercel:openai/gpt-4o` → VercelAi)。MVP 只装第一个,Vercel 在用户实测出现「我要用 Ollama / OpenAI」需求时再装第二个。
 
 ## 8. Skill — Builtin / Custom 二分(v0.2 实装,接口预留)
 
