@@ -42,7 +42,12 @@ export class BrowserTabRuntime {
     this.view.webContents.on('did-navigate', (_e, url) => {
       ;(this.meta.state as BrowserTabState).url = url
       this.onUrlChanged?.(url)
-      this.onWorkspaceEvent?.({ source: 'browser', action: 'navigate', target: url })
+      this.onWorkspaceEvent?.({
+        source: 'browser',
+        action: 'navigate',
+        target: url,
+        meta: { summary: `navigate → ${hostFromUrl(url)}` },
+      })
     })
     this.view.webContents.on('did-navigate-in-page', (_e, url) => {
       ;(this.meta.state as BrowserTabState).url = url
@@ -51,6 +56,7 @@ export class BrowserTabRuntime {
         source: 'browser',
         action: 'navigate-in-page',
         target: url,
+        meta: { summary: `navigate-in-page → ${url}` },
       })
     })
     this.view.webContents.on('did-finish-load', () => {
@@ -105,5 +111,14 @@ export class BrowserTabRuntime {
     if (!wc.isDestroyed()) {
       wc.close?.()
     }
+  }
+}
+
+/** URL → host(失败时回退原串截断) */
+function hostFromUrl(url: string): string {
+  try {
+    return new URL(url).host || url.slice(0, 80)
+  } catch {
+    return url.slice(0, 80)
   }
 }

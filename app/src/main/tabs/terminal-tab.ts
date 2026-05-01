@@ -127,7 +127,7 @@ export class TerminalTabRuntime {
       this.onWorkspaceEvent?.({
         source: 'shell',
         action: 'pty-exit',
-        meta: { exitCode },
+        meta: { exitCode, summary: `shell exited (code=${exitCode})` },
       })
       this.bufferLogStream?.end()
       this.bufferLogStream = null

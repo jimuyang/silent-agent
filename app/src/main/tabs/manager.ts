@@ -23,8 +23,9 @@ import {
 } from '@shared/consts'
 import type { StorageAdapter } from '../storage/adapter'
 import * as P from '../storage/paths'
-import { appendEventAt } from '../storage/events'
 import { captureBrowserSnapshot } from '../snapshots/browser'
+import { vcsFor } from '../vcs/registry'
+import type { EmitInput } from '../vcs/interface'
 import { BrowserTabRuntime } from './browser-tab'
 import { TerminalTabRuntime } from './terminal-tab'
 
@@ -138,7 +139,11 @@ export class TabManager {
         source: 'tab',
         action: 'open',
         tabId: meta.id,
-        meta: { type: 'file', path: meta.path },
+        meta: {
+          type: 'file',
+          path: meta.path,
+          summary: `open file → ${basename(meta.path)}`,
+        },
       })
       return meta
     } else {
@@ -150,23 +155,34 @@ export class TabManager {
     this.ensureBucket(workspaceId).set(meta.id, runtime)
 
     await this.persist(workspaceId)
+    const openSummary =
+      meta.type === 'browser'
+        ? `open browser → ${(meta.state as BrowserTabState).url}`
+        : meta.type === 'terminal'
+          ? `open terminal in ${(meta.state as TerminalTabState).cwd.replace(process.env.HOME || '', '~')}`
+          : `open ${meta.type}`
     await this.emit(workspaceId, {
       source: 'tab',
       action: 'open',
       tabId: meta.id,
-      meta: { type: meta.type, ...(meta.type === 'browser' && { url: (meta.state as BrowserTabState).url }) },
+      meta: {
+        type: meta.type,
+        summary: openSummary,
+        ...(meta.type === 'browser' && { url: (meta.state as BrowserTabState).url }),
+      },
     })
     return meta
   }
 
-  /** emit 事件到 workspace 的 events.jsonl。 */
-  private async emit(
-    workspaceId: string,
-    evt: Parameters<typeof appendEventAt>[1],
-  ): Promise<void> {
+  /**
+   * emit 事件 → workspace VCS:append events.jsonl + 命中规则可能触发 git commit。
+   * 走 vcs.emit 单一入口(design/08-vcs.md G3),调用方不感知 commit 细节。
+   */
+  private async emit(workspaceId: string, evt: EmitInput): Promise<void> {
     try {
       const wsPath = await this.storage.resolveWorkspacePath(this.agentId(), workspaceId)
-      await appendEventAt(wsPath, evt)
+      const vcs = await vcsFor(wsPath)
+      await vcs.emit(evt)
     } catch (e) {
       console.warn('[TabManager] emit event', e)
     }
@@ -233,7 +249,12 @@ export class TabManager {
       runtime.destroy()
       this.runtimes.get(workspaceId)?.delete(tabId)
       await this.persist(workspaceId)
-      await this.emit(workspaceId, { source: 'tab', action: 'close', tabId })
+      await this.emit(workspaceId, {
+        source: 'tab',
+        action: 'close',
+        tabId,
+        meta: { summary: `close ${tabId}` },
+      })
       return
     }
     // 无 runtime(file / silent-chat):扫所有 workspace 的 tabs.json,找到并删
@@ -244,7 +265,12 @@ export class TabManager {
       const tabs = await this.storage.getTabs(agentId, w.id)
       if (tabs.some((t) => t.id === tabId)) {
         await this.storage.setTabs(agentId, w.id, tabs.filter((t) => t.id !== tabId))
-        await this.emit(w.id, { source: 'tab', action: 'close', tabId })
+        await this.emit(w.id, {
+          source: 'tab',
+          action: 'close',
+          tabId,
+          meta: { summary: `close ${tabId}` },
+        })
         return
       }
     }
@@ -260,7 +286,12 @@ export class TabManager {
     }
     const wid = found?.workspaceId ?? (await this.findWorkspaceIdByTab(tabId))
     if (wid) {
-      await this.emit(wid, { source: 'tab', action: 'focus', tabId })
+      await this.emit(wid, {
+        source: 'tab',
+        action: 'focus',
+        tabId,
+        meta: { summary: `focus → ${tabId}` },
+      })
     }
   }
 

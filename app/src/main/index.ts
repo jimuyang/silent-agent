@@ -4,7 +4,12 @@
 
 import { app, BrowserWindow, shell } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// ESM 下 __dirname 不存在,Vite 之前帮我们打 CJS shim,引入 simple-git 后 bundle
+// 切到 pure ESM 模式不再注入。手动从 import.meta.url 推导出来。
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 import { LocalFsAdapter } from './storage/local-fs'
 import { AgentRegistry } from './agent/registry'
@@ -14,6 +19,7 @@ import { TabManager } from './tabs/manager'
 import { registerTabManager, unregisterTabManager } from './ipc/tab'
 import { ChatManager } from './chat/manager'
 import { registerChatManager, unregisterChatManager } from './ipc/chat'
+import { disposeAllVcs } from './vcs/registry'
 
 // [main] 开 CDP remote-debugging-port,让 Playwright (snapshots/playwright-cdp.ts)
 // 能 connectOverCDP 抓 ariaSnapshot。必须在 app.whenReady 之前 appendSwitch,
@@ -116,4 +122,13 @@ app.whenReady().then(async () => {
 // macOS 默认关闭所有窗口后应用仍驻留(要 Cmd+Q 才退);其他平台直接 quit
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// 退出前清 WorkspaceVCS 的 idle timer / debounce timer,避免 timer 拉住 event loop
+let quitting = false
+app.on('before-quit', (e) => {
+  if (quitting) return
+  e.preventDefault()
+  quitting = true
+  void disposeAllVcs().finally(() => app.exit(0))
 })
