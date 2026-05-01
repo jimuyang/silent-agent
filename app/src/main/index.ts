@@ -15,6 +15,12 @@ import { registerTabManager, unregisterTabManager } from './ipc/tab'
 import { ChatManager } from './chat/manager'
 import { registerChatManager, unregisterChatManager } from './ipc/chat'
 
+// [main] 开 CDP remote-debugging-port,让 Playwright (snapshots/playwright-cdp.ts)
+// 能 connectOverCDP 抓 ariaSnapshot。必须在 app.whenReady 之前 appendSwitch,
+// app 启动后 Chromium 才会 bind 这个端口。9222 是 Chromium 业界惯例;
+// 如端口冲突,Chromium 会启动失败 — 暂时硬编码,真冲突再加端口探测。
+app.commandLine.appendSwitch('remote-debugging-port', '9222')
+
 /**
  * 只建 window,不立即 load renderer —— 给调用方留出时间注册 TabManager 等窗口级资源,
  * 避免 renderer 启动后立刻发 IPC 却找不到对应的 manager(竞态)。

@@ -24,6 +24,7 @@ import {
 import type { StorageAdapter } from '../storage/adapter'
 import * as P from '../storage/paths'
 import { appendEventAt } from '../storage/events'
+import { captureBrowserSnapshot } from '../snapshots/browser'
 import { BrowserTabRuntime } from './browser-tab'
 import { TerminalTabRuntime } from './terminal-tab'
 
@@ -169,6 +170,51 @@ export class TabManager {
     } catch (e) {
       console.warn('[TabManager] emit event', e)
     }
+  }
+
+  /**
+   * 处理 BrowserTabRuntime 抛出来的 workspace event。
+   * 两类触发抓 ariaSnapshot:
+   *   - `load-finish` 整页加载完成
+   *   - `navigate-in-page` SPA pushState 路由变化
+   * 两类都**等 500ms** 再抓:整页 did-finish-load 等价 window.onload,
+   * 但 React/Vue/SWR/RQ 等异步取数据还没回来;SPA route change 后框架也要时间挂载组件。
+   * 抓取结果 enrich 到 event.meta(summary + detailPath);失败仅 console.warn 不阻断 emit。
+   */
+  private async handleBrowserEvent(
+    workspaceId: string,
+    tabId: string,
+    runtime: BrowserTabRuntime,
+    evt: { source: 'browser'; action: string; target?: string; meta?: Record<string, unknown> },
+  ): Promise<void> {
+    let enriched = evt
+    const shouldSnapshot = evt.action === 'load-finish' || evt.action === 'navigate-in-page'
+    if (shouldSnapshot) {
+      try {
+        await new Promise((r) => setTimeout(r, 500))
+        if (runtime.view.webContents.isDestroyed()) {
+          await this.emit(workspaceId, { ...evt, tabId })
+          return
+        }
+        const wsPath = await this.storage.resolveWorkspacePath(this.agentId(), workspaceId)
+        const url = evt.target ?? runtime.view.webContents.getURL()
+        const title = (evt.meta?.title as string | undefined) ?? runtime.view.webContents.getTitle()
+        const snap = await captureBrowserSnapshot(runtime.view.webContents, wsPath, tabId, url, title)
+        if (snap) {
+          enriched = {
+            ...evt,
+            meta: {
+              ...(evt.meta ?? {}),
+              summary: snap.summary,
+              detailPath: snap.detailPath,
+            },
+          }
+        }
+      } catch (e) {
+        console.warn('[TabManager] browser snapshot failed:', (e as Error).message)
+      }
+    }
+    await this.emit(workspaceId, { ...enriched, tabId })
   }
 
   /** 为 browser/terminal 创建 .silent/tabs/<tid>/ 产物目录(snapshot / buffer 放这儿) */
@@ -318,7 +364,9 @@ export class TabManager {
       rt.onTitleChanged = () => this.persist(workspaceId).catch(console.warn)
       rt.onUrlChanged = () => this.persist(workspaceId).catch(console.warn)
       rt.onWorkspaceEvent = (evt) => {
-        this.emit(workspaceId, { ...evt, tabId: meta.id }).catch(() => {})
+        // Phase 5d: load-finish 时,先抽 Defuddle snapshot 落 NNN.md + latest.md,
+        // 再把 detailPath / summary 注入 events.jsonl 的 meta(2 层 schema · Layer 1)
+        void this.handleBrowserEvent(workspaceId, meta.id, rt, evt)
       }
       return rt
     }
