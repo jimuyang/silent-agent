@@ -15,6 +15,7 @@ import type {
   FileTabState,
   TabMeta,
   TerminalTabState,
+  WorkspaceLayout,
 } from '@shared/types'
 import {
   SILENT_CHAT_TAB_ID,
@@ -29,6 +30,7 @@ import { vcsFor } from '../vcs/registry'
 import type { EmitInput } from '../vcs/interface'
 import { BrowserTabRuntime } from './browser-tab'
 import { TerminalTabRuntime } from './terminal-tab'
+import { readLayout } from '../ipc/layout'
 
 export interface OpenBrowserArgs {
   type: 'browser'
@@ -382,8 +384,15 @@ export class TabManager {
     await this.persist(found.workspaceId)
   }
 
-  /** 切工作区:把运行时限定到新 workspaceId 下的 tabs;其他隐藏。 */
-  async switchWorkspace(workspaceId: string): Promise<TabMeta[]> {
+  /**
+   * 切工作区:把运行时限定到新 workspaceId 下的 tabs;其他隐藏。
+   *
+   * **返回 tabs 和 layout 一起**,renderer 一次 .then 拿全 → setTabs / setRoot 同 React 渲染
+   * 提交批处理 → 不会有 race(独立 IPC 顺序不定 → reconcile 把 saved tree 误清空)。
+   */
+  async switchWorkspace(
+    workspaceId: string,
+  ): Promise<{ tabs: TabMeta[]; layout: WorkspaceLayout }> {
     this.hideAll()
     // 迁移:老 workspace 可能没有 silent-chat tab,补一个
     await this.ensureSilentChatTab(workspaceId)
@@ -391,7 +400,10 @@ export class TabManager {
     if (!this.runtimes.has(workspaceId)) {
       await this.restoreWorkspace(workspaceId)
     }
-    return this.storage.getTabs(this.agentId(), workspaceId)
+    const tabs = await this.storage.getTabs(this.agentId(), workspaceId)
+    const wsPath = await this.storage.resolveWorkspacePath(this.agentId(), workspaceId)
+    const layout = await readLayout(wsPath)
+    return { tabs, layout }
   }
 
   /** 幂等:确保某 workspace 的 tabs.json 里有一个 silent-chat tab。 */

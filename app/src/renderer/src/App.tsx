@@ -44,6 +44,19 @@ export default function App() {
     [workspaces, activeWorkspaceId],
   )
 
+  // ============ Layout state(递归 LayoutNode 树) ============
+  const [root, setRoot] = useState<LayoutNode | null>(null)
+  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null)
+  const layoutLoadedRef = useRef(false)
+
+  // 1) workspace 切换:tabs 跟 layout 通过 useTabs 一次 IPC 原子拿回。
+  //    onLayoutLoaded 在 setTabs 同一 .then 内被调,React 18 自动批处理 → setTabs 和 setRoot
+  //    在同一渲染提交内完成 → 杜绝 race(以前两条独立 IPC,layout 先回时 reconcile 用空 tabs 把 saved tree 误清空)。
+  const onLayoutLoaded = useCallback((l: { root?: LayoutNode | null }) => {
+    setRoot(l.root ?? null)
+    layoutLoadedRef.current = true
+  }, [])
+
   const {
     tabs,
     activeTab,
@@ -53,32 +66,12 @@ export default function App() {
     openFile,
     duplicate: duplicateTab,
     close: closeTab,
-  } = useTabs(activeWorkspaceId)
+  } = useTabs(activeWorkspaceId, { onLayoutLoaded })
 
-  // ============ Layout state(递归 LayoutNode 树) ============
-  const [root, setRoot] = useState<LayoutNode | null>(null)
-  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null)
-  const layoutLoadedRef = useRef(false)
-
-  // 1) workspace 切换 → 拉对应 layout
+  // workspace 切换时重置 layoutLoadedRef(下次 onLayoutLoaded 触发再变 true)
   useEffect(() => {
     layoutLoadedRef.current = false
-    if (!activeWorkspaceId) {
-      setRoot(null)
-      return
-    }
-    let cancelled = false
-    ipc.layout
-      .get(activeWorkspaceId)
-      .then((l) => {
-        if (cancelled) return
-        setRoot(l.root ?? null)
-        layoutLoadedRef.current = true
-      })
-      .catch((e) => console.warn('[App] layout.get failed:', e))
-    return () => {
-      cancelled = true
-    }
+    if (!activeWorkspaceId) setRoot(null)
   }, [activeWorkspaceId])
 
   // 2) tabs 变化 → reconcile 树(派生默认 / 移除 stale / 新 tab 进 focused / 折叠空 pane)

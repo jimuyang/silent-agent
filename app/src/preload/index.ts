@@ -67,7 +67,10 @@ const api = {
     navigate: (tabId: string, url: string) =>
       ipcRenderer.invoke(IPC.TAB_NAVIGATE, { tabId, url }) as Promise<void>,
     switchWorkspace: (workspaceId: string) =>
-      ipcRenderer.invoke(IPC.TAB_SWITCH_WORKSPACE, workspaceId) as Promise<TabMeta[]>,
+      ipcRenderer.invoke(IPC.TAB_SWITCH_WORKSPACE, workspaceId) as Promise<{
+        tabs: TabMeta[]
+        layout: WorkspaceLayout
+      }>,
     popupTypeMenu: () =>
       ipcRenderer.invoke(IPC.TAB_POPUP_TYPE_MENU) as Promise<
         'browser' | 'terminal' | 'file' | 'file-new' | null

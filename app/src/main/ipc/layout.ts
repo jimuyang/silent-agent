@@ -61,7 +61,7 @@ function sanitizeNode(raw: unknown, depth = 0): LayoutNode | null {
   return null
 }
 
-async function readLayout(wsPath: string): Promise<WorkspaceLayout> {
+export async function readLayout(wsPath: string): Promise<WorkspaceLayout> {
   try {
     const raw = await readFile(workspaceLayoutFile(wsPath), 'utf8')
     const parsed = JSON.parse(raw) as { root?: unknown }

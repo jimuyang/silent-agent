@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { TabMeta } from '@shared/types'
+import type { TabMeta, WorkspaceLayout } from '@shared/types'
 import { ipc } from '../lib/ipc'
 
 export interface UseTabsResult {
@@ -16,12 +16,26 @@ export interface UseTabsResult {
   reload: () => Promise<void>
 }
 
+export interface UseTabsOptions {
+  /**
+   * workspace 切换时,layout 跟 tabs 一起从 main 一次拿回。本回调在 setTabs 同一个 .then
+   * 内被调,React 18 自动批处理这次同步状态更新 → setTabs / setRoot 在一个渲染提交内完成,
+   * 杜绝 layout 和 tabs 的并发 IPC race(以前是两条独立 IPC,谁先回不定 → reconcile 把 saved tree 误清)。
+   */
+  onLayoutLoaded?: (layout: WorkspaceLayout) => void
+}
+
 /**
  * 订阅当前 workspace 下所有 tab 的运行时状态。
  * 每个 workspace 有一个 silent-chat 类型 tab(创建 workspace 时自动 seed),是默认激活目标。
- * 切 workspace 时调 tab.switchWorkspace,让 main 端隐掉旧 workspace 的 native view、恢复新 workspace 的。
+ * 切 workspace 时调 tab.switchWorkspace,让 main 端隐掉旧 workspace 的 native view、恢复新 workspace 的,
+ * 同时一次拿回 tabs 和 layout(原子加载,杜绝独立 IPC 之间的 race)。
  */
-export function useTabs(workspaceId: string | null): UseTabsResult {
+export function useTabs(
+  workspaceId: string | null,
+  options: UseTabsOptions = {},
+): UseTabsResult {
+  const { onLayoutLoaded } = options
   const [tabs, setTabs] = useState<TabMeta[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
 
@@ -34,7 +48,7 @@ export function useTabs(workspaceId: string | null): UseTabsResult {
     setTabs(list)
   }, [workspaceId])
 
-  // workspace 切换:告诉 main 做运行时切换,把默认 active 设成 silent-chat tab
+  // workspace 切换:一次 IPC 拿回 { tabs, layout },同步 setTabs + onLayoutLoaded → React 批处理
   useEffect(() => {
     let mounted = true
     if (!workspaceId) {
@@ -44,17 +58,19 @@ export function useTabs(workspaceId: string | null): UseTabsResult {
     }
     ipc.tab
       .switchWorkspace(workspaceId)
-      .then((list) => {
+      .then(({ tabs: list, layout }) => {
         if (!mounted) return
         setTabs(list)
         const silent = list.find((t) => t.type === 'silent-chat')
         setActiveTabId(silent?.id ?? list[0]?.id ?? null)
+        // 同 .then 内调 callback → setRoot 在同一 microtask,React 18 自动批处理
+        onLayoutLoaded?.(layout)
       })
       .catch((e) => console.error('[useTabs] switchWorkspace', e))
     return () => {
       mounted = false
     }
-  }, [workspaceId])
+  }, [workspaceId, onLayoutLoaded])
 
   const openBrowser = useCallback(
     async (url: string) => {
