@@ -29,12 +29,10 @@ export const IPC = {
   TAB_DUPLICATE: 'tab.duplicate',
   TAB_CLOSE: 'tab.close',
   TAB_FOCUS: 'tab.focus',
-  TAB_SET_BOUNDS: 'tab.setBounds',
-  /** Per-tab bounds:支持多 BrowserView 并排(分栏后取代 TAB_SET_BOUNDS 的单 view 模型) */
+  /** Per-tab bounds:多 BrowserView 并排各自定位 */
   TAB_SET_BOUNDS_FOR: 'tab.setBoundsFor',
-  /** 单 tab 隐藏(组件 unmount 时清理 native overlay) */
+  /** 单 tab 隐藏(BrowserPane unmount 时清理 native overlay) */
   TAB_HIDE_TAB: 'tab.hideTab',
-  TAB_HIDE_ALL: 'tab.hideAll',
   TAB_NAVIGATE: 'tab.navigate',
   TAB_SWITCH_WORKSPACE: 'tab.switchWorkspace',
   TAB_POPUP_TYPE_MENU: 'tab.popupTypeMenu',

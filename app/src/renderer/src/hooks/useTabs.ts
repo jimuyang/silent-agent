@@ -118,12 +118,11 @@ export function useTabs(workspaceId: string | null): UseTabsResult {
     await ipc.tab.navigate(tabId, url)
   }, [])
 
-  // activeTabId 变化 → main 端 focus(内部会 hideAll + show if runtime)
+  // activeTabId 变化 → main 端 emit `tab.focus` 事件进 events.jsonl(纯观察,不动 view)。
+  // view 显示由各 BrowserPane 自己 mount/unmount 驱动 setBoundsFor / hideTab,跟这里无关。
   useEffect(() => {
     if (activeTabId) {
       ipc.tab.focus(activeTabId).catch((e) => console.warn('[useTabs] focus', e))
-    } else {
-      ipc.tab.hideAll().catch((e) => console.warn('[useTabs] hideAll', e))
     }
   }, [activeTabId])
 

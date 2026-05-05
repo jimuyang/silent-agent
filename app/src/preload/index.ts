@@ -59,10 +59,7 @@ const api = {
       ipcRenderer.invoke(IPC.TAB_CLOSE, tabId) as Promise<void>,
     focus: (tabId: string) =>
       ipcRenderer.invoke(IPC.TAB_FOCUS, tabId) as Promise<void>,
-    hideAll: () => ipcRenderer.invoke(IPC.TAB_HIDE_ALL) as Promise<void>,
     hideTab: (tabId: string) => ipcRenderer.invoke(IPC.TAB_HIDE_TAB, tabId) as Promise<void>,
-    setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
-      ipcRenderer.invoke(IPC.TAB_SET_BOUNDS, bounds) as Promise<void>,
     setBoundsFor: (
       tabId: string,
       bounds: { x: number; y: number; width: number; height: number },

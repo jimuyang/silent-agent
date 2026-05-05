@@ -57,17 +57,6 @@ export function registerTabIpc() {
   })
 
   ipcMain.handle(
-    IPC.TAB_SET_BOUNDS,
-    async (
-      event,
-      bounds: { x: number; y: number; width: number; height: number },
-    ) => {
-      // [DEPRECATED] 单 view 模型,保留兼容。新代码走 TAB_SET_BOUNDS_FOR。
-      managerFor(event).setBounds(bounds)
-    },
-  )
-
-  ipcMain.handle(
     IPC.TAB_SET_BOUNDS_FOR,
     async (
       event,
@@ -82,10 +71,6 @@ export function registerTabIpc() {
 
   ipcMain.handle(IPC.TAB_HIDE_TAB, async (event, tabId: string) => {
     managerFor(event).hideTab(tabId)
-  })
-
-  ipcMain.handle(IPC.TAB_HIDE_ALL, async (event) => {
-    managerFor(event).hideAll()
   })
 
   ipcMain.handle(

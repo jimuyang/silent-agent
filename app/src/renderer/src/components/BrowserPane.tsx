@@ -22,6 +22,8 @@ export default function BrowserPane({ tabId }: { tabId: string }) {
 
     const sync = () => {
       const r = el.getBoundingClientRect()
+      // 0 尺寸跳过 — Electron WebContentsView 在 setBounds(0×0) 后会卡进无渲染状态
+      if (r.width <= 0 || r.height <= 0) return
       ipc.tab
         .setBoundsFor(tabId, { x: r.x, y: r.y, width: r.width, height: r.height })
         .catch((e) => console.warn('[BrowserPane] setBoundsFor', e))

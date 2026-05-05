@@ -374,14 +374,6 @@ export class TabManager {
     }
   }
 
-  /**
-   * @deprecated 单 view 模型遗留,保留为 no-op 防止旧 renderer 报错。
-   * 新代码应该走 setBoundsFor(tabId, bounds)。
-   */
-  setBounds(_bounds: { x: number; y: number; width: number; height: number }): void {
-    /* no-op,已被 setBoundsFor 取代 */
-  }
-
   async navigate(tabId: string, url: string): Promise<void> {
     const found = this.findRuntime(tabId)
     if (!found) return
