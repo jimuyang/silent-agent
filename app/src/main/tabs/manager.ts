@@ -21,6 +21,7 @@ import {
   SILENT_CHAT_TAB_PATH,
   tabRelPath,
 } from '@shared/consts'
+import { IPC } from '@shared/ipc'
 import type { StorageAdapter } from '../storage/adapter'
 import * as P from '../storage/paths'
 import { captureBrowserSnapshot } from '../snapshots/browser'
@@ -66,10 +67,6 @@ function newTabId(type: 'browser' | 'terminal' | 'file'): string {
 export class TabManager {
   // workspaceId → tabId → runtime
   private runtimes = new Map<string, Map<string, TabRuntime>>()
-  // current 只跟踪有 native view 的 runtime(即 browser),
-  // 用于在 setBounds 时 follow。terminal / file / silent-chat 不参与。
-  private current: BrowserTabRuntime | null = null
-  private currentBounds = { x: 0, y: 0, width: 0, height: 0 }
 
   constructor(
     private readonly window: BrowserWindow,
@@ -239,13 +236,59 @@ export class TabManager {
     await mkdir(P.workspaceTabDir(wsPath, tabId), { recursive: true })
   }
 
+  /**
+   * 复制一个 tab —— 用相同 type + 关键 state(URL / cwd / path)起一个新 tab。
+   * 用例:1-tab pane split 时,复制当前 tab 让新 pane 有内容。
+   *
+   *   - browser:复制当前 URL
+   *   - terminal:复制 spawn cwd / shell / cols / rows
+   *   - file:复制路径(开同文件第二个实例)
+   *   - silent-chat:不可复制(每 workspace 唯一,绑定 main_chat agent)
+   */
+  async duplicate(tabId: string): Promise<TabMeta> {
+    // 先在 runtime map 里找(browser / terminal)
+    const found = this.findRuntime(tabId)
+    if (found) {
+      return await this.duplicateMeta(found.workspaceId, found.runtime.meta)
+    }
+    // 无 runtime(file / silent-chat)— 扫所有 workspace 的 tabs.json
+    const agentId = this.agentId()
+    const workspaces = await this.storage.listWorkspaces(agentId)
+    for (const w of workspaces) {
+      const list = await this.storage.getTabs(agentId, w.id)
+      const t = list.find((x) => x.id === tabId)
+      if (t) return await this.duplicateMeta(w.id, t)
+    }
+    throw new Error(`duplicate: tab not found: ${tabId}`)
+  }
+
+  private async duplicateMeta(workspaceId: string, meta: TabMeta): Promise<TabMeta> {
+    switch (meta.type) {
+      case 'browser': {
+        const state = (meta.state as BrowserTabState | null) ?? { url: 'about:blank' }
+        return await this.open(workspaceId, { type: 'browser', url: state.url })
+      }
+      case 'terminal': {
+        const state = meta.state as TerminalTabState | null
+        return await this.open(workspaceId, {
+          type: 'terminal',
+          cwd: state?.cwd,
+          shell: state?.shell,
+          cols: state?.cols,
+          rows: state?.rows,
+        })
+      }
+      case 'file':
+        return await this.open(workspaceId, { type: 'file', path: meta.path })
+      case 'silent-chat':
+        throw new Error('silent-chat tab is unique per workspace and cannot be duplicated')
+    }
+  }
+
   async close(tabId: string): Promise<void> {
     const found = this.findRuntime(tabId)
     if (found) {
       const { workspaceId, runtime } = found
-      if (runtime instanceof BrowserTabRuntime && this.current === runtime) {
-        this.current = null
-      }
       runtime.destroy()
       this.runtimes.get(workspaceId)?.delete(tabId)
       await this.persist(workspaceId)
@@ -276,15 +319,17 @@ export class TabManager {
     }
   }
 
+  /**
+   * 焦点切换 — 只 emit `tab.focus` 事件,**不再管 view 可见性**。
+   *
+   * 自分栏支持后(per-tab bounds),renderer 自己通过 setBoundsFor / hideTab 控制
+   * 哪些 BrowserView 显示在哪里:BrowserPane 组件 mount 时 setBoundsFor,unmount
+   * 时 hideTab。一个 pane 切到另一个浏览器 tab → 旧的 unmount(自动 hide),新的
+   * mount(自动 show + 同步 bounds)。两 pane 同时挂两个 browser 也兼容(各自
+   * setBoundsFor 自己的 div rect)。
+   */
   async focus(tabId: string): Promise<void> {
-    this.hideAll()
-    const found = this.findRuntime(tabId)
-    // terminal 没有 native view, show 是 no-op 也不更新 current
-    if (found?.runtime instanceof BrowserTabRuntime) {
-      found.runtime.show(this.currentBounds)
-      this.current = found.runtime
-    }
-    const wid = found?.workspaceId ?? (await this.findWorkspaceIdByTab(tabId))
+    const wid = await this.findWorkspaceIdByTab(tabId)
     if (wid) {
       await this.emit(wid, {
         source: 'tab',
@@ -293,6 +338,20 @@ export class TabManager {
         meta: { summary: `focus → ${tabId}` },
       })
     }
+  }
+
+  /** Per-tab bounds:支持双 BrowserView 并排。仅对 browser tab 有效,其余 no-op。 */
+  setBoundsFor(tabId: string, bounds: { x: number; y: number; width: number; height: number }): void {
+    const found = this.findRuntime(tabId)
+    if (!found || !(found.runtime instanceof BrowserTabRuntime)) return
+    found.runtime.show(bounds)
+  }
+
+  /** 隐藏单个 tab 的 native view(BrowserPane unmount 时清理)。 */
+  hideTab(tabId: string): void {
+    const found = this.findRuntime(tabId)
+    if (!found || !(found.runtime instanceof BrowserTabRuntime)) return
+    found.runtime.hide()
   }
 
   /** 反查 tab 所属 workspace:先查 runtime map(browser/terminal),不命中扫 tabs.json(silent-chat/file)。 */
@@ -313,12 +372,14 @@ export class TabManager {
     for (const [, bucket] of this.runtimes) {
       for (const [, r] of bucket) r.hide()
     }
-    this.current = null
   }
 
-  setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
-    this.currentBounds = bounds
-    if (this.current) this.current.show(bounds)
+  /**
+   * @deprecated 单 view 模型遗留,保留为 no-op 防止旧 renderer 报错。
+   * 新代码应该走 setBoundsFor(tabId, bounds)。
+   */
+  setBounds(_bounds: { x: number; y: number; width: number; height: number }): void {
+    /* no-op,已被 setBoundsFor 取代 */
   }
 
   async navigate(tabId: string, url: string): Promise<void> {
@@ -385,6 +446,35 @@ export class TabManager {
     return null
   }
 
+  /**
+   * 处理 BrowserTabRuntime 的 window.open / target=_blank 事件:
+   * 在同 workspace 起一个 sibling browser tab 加载该 URL,**推 renderer 让它把
+   * 新 tab 加入 TabBar + 切过去**。focus 不在 main 这里调:让 renderer 通过
+   * setActiveTabId 副作用自然触发(避免双 focus 事件 + 状态不同步)。
+   * 失败仅 console.warn,不阻断主流程(防止 page 端的恶意 popup 风暴打挂 manager)。
+   */
+  private async handleWindowOpen(
+    workspaceId: string,
+    parentTabId: string,
+    url: string,
+  ): Promise<void> {
+    try {
+      const newMeta = await this.open(workspaceId, { type: 'browser', url })
+      // [main] webContents.send 是 main → renderer 单向推,renderer 用 ipcRenderer.on 订阅
+      // parentTabId 让 renderer 把新 tab 落到点击源 tab 所在的 pane(否则 reconcile 会用 focusedPane,可能跑到别的栏)
+      this.window.webContents.send(IPC.TAB_OPENED, {
+        workspaceId,
+        meta: newMeta,
+        parentTabId,
+      })
+    } catch (e) {
+      console.warn(
+        `[TabManager] handleWindowOpen failed (parent=${parentTabId}, url=${url}):`,
+        (e as Error).message,
+      )
+    }
+  }
+
   private async createRuntime(
     workspaceId: string,
     meta: TabMeta,
@@ -398,6 +488,9 @@ export class TabManager {
         // Phase 5d: load-finish 时,先抽 Defuddle snapshot 落 NNN.md + latest.md,
         // 再把 detailPath / summary 注入 events.jsonl 的 meta(2 层 schema · Layer 1)
         void this.handleBrowserEvent(workspaceId, meta.id, rt, evt)
+      }
+      rt.onWindowOpen = ({ url }) => {
+        void this.handleWindowOpen(workspaceId, meta.id, url)
       }
       return rt
     }
@@ -455,6 +548,5 @@ export class TabManager {
       for (const [, r] of bucket) r.destroy()
     }
     this.runtimes.clear()
-    this.current = null
   }
 }

@@ -30,7 +30,19 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     // 改 src/preload/** → 自动重载 renderer(preload 是 renderer 起来前注入的)
-    build: { watch: {} },
+    build: {
+      watch: {},
+      rollupOptions: {
+        // 两个 preload 入口:
+        //   index           主 BrowserWindow,暴露 window.api.*
+        //   browser-tab     每个内嵌 BrowserTabRuntime 的 WebContentsView,
+        //                   只装 click listener,不暴露 API 到 page world
+        input: {
+          index: resolve('src/preload/index.ts'),
+          'browser-tab': resolve('src/preload/browser-tab-preload.ts'),
+        },
+      },
+    },
   },
   renderer: {
     resolve: {

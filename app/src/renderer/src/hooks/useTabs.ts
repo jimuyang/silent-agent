@@ -10,6 +10,7 @@ export interface UseTabsResult {
   openBrowser: (url: string) => Promise<TabMeta>
   openTerminal: (cwd?: string, command?: { file: string; args: string[] }) => Promise<TabMeta>
   openFile: (path: string) => Promise<TabMeta>
+  duplicate: (tabId: string) => Promise<TabMeta>
   close: (tabId: string) => Promise<void>
   navigate: (tabId: string, url: string) => Promise<void>
   reload: () => Promise<void>
@@ -88,6 +89,17 @@ export function useTabs(workspaceId: string | null): UseTabsResult {
     [workspaceId, reload],
   )
 
+  // 复制现有 tab(同 type / 同关键 state)。不更新 activeTabId — 由 caller(App)决定放哪。
+  const duplicate = useCallback(
+    async (tabId: string) => {
+      if (!workspaceId) throw new Error('no active workspace')
+      const newTab = await ipc.tab.duplicate(tabId)
+      await reload()
+      return newTab
+    },
+    [workspaceId, reload],
+  )
+
   const close = useCallback(
     async (tabId: string) => {
       await ipc.tab.close(tabId)
@@ -115,6 +127,18 @@ export function useTabs(workspaceId: string | null): UseTabsResult {
     }
   }, [activeTabId])
 
+  // 订阅 main 主动建 tab 的事件(目前唯一来源:browser-tab window.open 拦截)。
+  // payload.workspaceId 跟当前 workspace 不一致就忽略(用户已切别处)。
+  useEffect(() => {
+    if (!workspaceId) return
+    const unsubscribe = ipc.tab.onOpened((payload) => {
+      if (payload.workspaceId !== workspaceId) return
+      setTabs((prev) => (prev.some((t) => t.id === payload.meta.id) ? prev : [...prev, payload.meta]))
+      setActiveTabId(payload.meta.id)
+    })
+    return unsubscribe
+  }, [workspaceId])
+
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null
 
   return {
@@ -125,6 +149,7 @@ export function useTabs(workspaceId: string | null): UseTabsResult {
     openBrowser,
     openTerminal,
     openFile,
+    duplicate,
     close,
     navigate,
     reload,

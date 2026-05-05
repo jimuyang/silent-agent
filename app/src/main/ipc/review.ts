@@ -8,6 +8,7 @@ import { ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
 import type { StorageAdapter } from '../storage/adapter'
 import { runReview } from '../review/runner'
+import { vcsFor } from '../vcs/registry'
 import { agentIdFromEvent } from './context'
 
 export function registerReviewIpc(storage: StorageAdapter) {
@@ -15,6 +16,28 @@ export function registerReviewIpc(storage: StorageAdapter) {
     const agentId = agentIdFromEvent(event)
     const wsPath = await storage.resolveWorkspacePath(agentId, workspaceId)
     // 每次都 fresh session(review 是系统调用,用完即弃)
-    return runReview({ workspacePath: wsPath })
+    const result = await runReview({ workspacePath: wsPath })
+
+    // emit review.surfaced 进 events.jsonl,timeline 留痕「review 在 T 时刻产了建议」。
+    // 内联 await:emit 当前就一次 jsonl append,~1ms 不会让 IPC 显著延迟。
+    if (result.ok) {
+      try {
+        const vcs = await vcsFor(wsPath)
+        const firstLine = result.suggestion?.split('\n').find((l) => l.trim()) ?? ''
+        await vcs.emit({
+          source: 'review',
+          action: 'surfaced',
+          meta: {
+            summary: `review: ${firstLine.slice(0, 80) || 'no pattern found'}`,
+            sessionId: result.sessionId,
+            durationMs: result.durationMs,
+          },
+        })
+      } catch (e) {
+        console.warn('[ipc/review] emit review.surfaced failed:', (e as Error).message)
+      }
+    }
+
+    return result
   })
 }

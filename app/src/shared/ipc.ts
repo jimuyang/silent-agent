@@ -18,16 +18,30 @@ export const IPC = {
   WORKSPACE_DELETE: 'workspace.delete',
   WORKSPACE_LOAD_MESSAGES: 'workspace.loadMessages',
 
+  // layout(per-workspace 主区分栏比例 / 后续布局状态)
+  LAYOUT_GET: 'layout.get',
+  LAYOUT_SET: 'layout.set',
+
   // tab
   TAB_LIST: 'tab.list',
   TAB_OPEN: 'tab.open',
+  /** 复制一个 tab(用同 url / cwd / path 起一个新 tab,silent-chat 不可复制) */
+  TAB_DUPLICATE: 'tab.duplicate',
   TAB_CLOSE: 'tab.close',
   TAB_FOCUS: 'tab.focus',
   TAB_SET_BOUNDS: 'tab.setBounds',
+  /** Per-tab bounds:支持多 BrowserView 并排(分栏后取代 TAB_SET_BOUNDS 的单 view 模型) */
+  TAB_SET_BOUNDS_FOR: 'tab.setBoundsFor',
+  /** 单 tab 隐藏(组件 unmount 时清理 native overlay) */
+  TAB_HIDE_TAB: 'tab.hideTab',
   TAB_HIDE_ALL: 'tab.hideAll',
   TAB_NAVIGATE: 'tab.navigate',
   TAB_SWITCH_WORKSPACE: 'tab.switchWorkspace',
   TAB_POPUP_TYPE_MENU: 'tab.popupTypeMenu',
+  TAB_POPUP_CONTEXT_MENU: 'tab.popupContextMenu',
+  // main → renderer push:main 内部主动建了 tab(如 window.open 拦截 → 起 sibling tab)
+  // 时通知 renderer 把它加到 tab list 并切过去。renderer 自发起的 TAB_OPEN 不走这条。
+  TAB_OPENED: 'tab.opened',
 
   // terminal (main ↔ renderer, per-tab 事件信道是动态拼 tabId,不在这里枚举)
   TERMINAL_WRITE: 'terminal.write',

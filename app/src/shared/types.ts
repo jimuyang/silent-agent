@@ -49,23 +49,147 @@ export interface ChatMessage {
   createdAt: string
 }
 
+// ============ Workspace Layout(递归 split 树 · Level 2) ============
+
+/**
+ * Pane —— 叶子节点,装一组 tab。
+ *
+ * 数据模型:
+ *   workspace ─┬─ tabs.json (TabMeta[])      tab 元数据(URL / 路径 / title / ...)
+ *              └─ layout.json
+ *                  └─ root: LayoutNode       递归 split 树,叶子 = pane
+ *
+ * 每个 tab 必须且仅出现在一个 pane.tabIds 里(全树范围)。tab 在 pane 间移动
+ * = pop 源 pane.tabIds + push 目标 pane.tabIds。
+ */
+export interface PaneMeta {
+  id: string
+  /** 本 pane 拥有的 tab id 列表(顺序就是 TabBar 渲染顺序) */
+  tabIds: string[]
+  /** 当前 active 的 tab id;null 表示空 pane(应自动合并/移除) */
+  activeTabId: string | null
+}
+
+/**
+ * Split —— 内部节点,把空间一分为二。
+ *
+ *   direction = 'row'    → 子节点左右排列(横向分栏)
+ *   direction = 'column' → 子节点上下排列(纵向分栏)
+ *   ratio                → 第一个 child 占的比例 ∈ [0.1, 0.9]
+ *   children             → 长度 2;每个仍是 LayoutNode(叶子或 split,可递归)
+ */
+export interface SplitMeta {
+  id: string
+  direction: 'row' | 'column'
+  ratio: number
+}
+
+export type LayoutNode =
+  | { kind: 'pane'; pane: PaneMeta }
+  | { kind: 'split'; split: SplitMeta; children: [LayoutNode, LayoutNode] }
+
+/**
+ * Workspace 主区布局(.silent/runtime/layout.json)
+ *
+ * `root` 缺失时,renderer 派生默认:
+ *   - 有 silent-chat:row split, ratio=0.69, [非chat tabs] | [silent-chat]
+ *   - 没有 silent-chat:单 pane,所有 tabs
+ */
+export interface WorkspaceLayout {
+  root?: LayoutNode
+}
+
 // ============ Workspace Event (统一事件流) ============
 
 // 所有事件汇入 `<workspace>/.silent/events.jsonl`,单一时间线
 export type EventSource =
-  | 'workspace' // workspace 生命周期(open/close)
+  | 'workspace' // workspace 生命周期(open/close/idle)
   | 'tab'       // tab 生命周期(open/close/focus)
-  | 'browser'   // 浏览器内动作(navigate/request/submit/click)
-  | 'shell'     // 终端内动作(exec/exit)
-  | 'file'      // 文件 save / edit
-  | 'chat'      // 用户 / agent chat turn
-  | 'agent'     // agent 工具调用 / 内部动作
-  | 'linked'    // linkedFolder probe 结果
+  | 'browser'   // 浏览器内动作(navigate/load-finish/click/...)
+  | 'shell'     // 终端内动作(exec/exit/pty-exit)
+  | 'file'      // 文件 save / edit(MVP 不主动 emit,git 懒发现)
+  | 'chat'      // 用户 / main_chat agent 对话 turn(Phase 6k/6l 接入)
+  | 'agent'     // agent tool 调用(Phase 6 main_chat 主权 tool 集)
+  | 'review'    // main_review 产出 suggestion + 用户接收/驳回(Phase 7)
+  | 'user'      // 用户裸操作(clipboard / 录制模式手势,Phase 7 / v0.2)
+  | 'linked'    // linkedFolder probe 结果(5g 可选)
+
+/**
+ * 已知 action 名 — `(source, action)` 二元组的真相源。
+ *
+ * - 用法:`emit({ source: 'browser', action: EventActions.browser.LOAD_FINISH, ... })`
+ * - 用 `as const` + `EventActionFor<S>` 让 IDE 补全 + 抓 typo
+ * - `WorkspaceEvent.action` 字段类型仍是 `string`(forward-compat)—— 加新 action
+ *   只需补到这里,旧调用点零改动
+ *
+ * 状态标记:
+ *   ✅ 已实装  🟡 设计预留尚未 emit  🔵 计划在某 Phase 接入
+ */
+export const EventActions = {
+  workspace: {
+    OPEN: 'open',           // 🟡 workspace 切换/启动 (Phase 5b 后续)
+    CLOSE: 'close',         // 🟡
+    IDLE: 'idle',           // 🔵 IdleTimer 30s 兜底(auto-commit 启用时;MVP off)
+  },
+  tab: {
+    OPEN: 'open',           // ✅ tab.open(browser/terminal/file)
+    CLOSE: 'close',         // ✅
+    FOCUS: 'focus',         // ✅
+  },
+  browser: {
+    NAVIGATE: 'navigate',                  // ✅ webContents did-navigate
+    NAVIGATE_IN_PAGE: 'navigate-in-page',  // ✅ did-navigate-in-page (SPA route)
+    LOAD_FINISH: 'load-finish',            // ✅ did-finish-load + ariaSnapshot
+    CLICK: 'click',                         // 🟡 计划:executeJavaScript 注入 listener
+    REQUEST: 'request',                     // 🟡 计划:webRequest.onCompleted
+    SUBMIT: 'submit',                       // 🟡 计划:form submit
+  },
+  shell: {
+    EXEC: 'exec',           // ✅ OSC 133;C preexec
+    EXIT: 'exit',           // ✅ OSC 133;D precmd(per-cmd snapshot)
+    PTY_EXIT: 'pty-exit',   // ✅ pty 进程死亡(shell 整个退出,不是单条命令)
+  },
+  file: {
+    SAVE: 'save',           // 🟡 设计预留;实际由 git status 懒发现,不主动 emit
+    EDIT: 'edit',           // 🟡 同上
+  },
+  chat: {
+    USER_TURN: 'user-turn',               // 🔵 Phase 6k/6l (CC SessionStop hook)
+    ASSISTANT_TURN: 'assistant-turn',     // 🔵
+    TURN_END: 'turn-end',                 // 🔵 Tier 1 auto-commit 触发候选
+    TOOL_USE: 'tool-use',                 // 🔵
+    TOOL_RESULT: 'tool-result',           // 🔵
+  },
+  agent: {
+    TOOL_USE: 'tool-use',                 // 🔵 Phase 6 main_chat 主权 tool
+    TOOL_RESULT: 'tool-result',           // 🔵
+  },
+  review: {
+    SURFACED: 'surfaced',                 // 🔵 Phase 7 main_review 推建议
+    ACCEPTED: 'accepted',                 // 🔵 用户接受
+    REJECTED: 'rejected',                 // 🔵 用户驳回
+  },
+  user: {
+    CLIPBOARD_COPY: 'clipboard.copy',     // 🔵 Phase 7 / v0.2 (按需 — Clipboard 行为捕获)
+    CLIPBOARD_PASTE: 'clipboard.paste',   // 🔵
+    RECORDING_START: 'recording.start',   // 🔵 Phase 7 / v0.2 (按需 — Recording 模式)
+    RECORDING_STOP: 'recording.stop',     // 🔵
+  },
+  linked: {
+    PROBE: 'probe',                       // 🔵 Phase 5g (可选)
+  },
+} as const
+
+/** `EventActionFor<'browser'>` = `'navigate' | 'navigate-in-page' | 'load-finish' | 'click' | ...` */
+export type EventActionFor<S extends EventSource> = S extends keyof typeof EventActions
+  ? (typeof EventActions)[S][keyof (typeof EventActions)[S]]
+  : string
 
 export interface WorkspaceEvent {
   ts: string                              // ISO
   source: EventSource
-  action: string                          // open | close | focus | navigate | exec | ...
+  /** 已知 action 见 `EventActions[source]`;字段类型保持 string 以便 forward-compat */
+  action: string
   tabId?: string                          // workspace / linked 级事件可无
   target?: string                         // URL / command / path
   meta?: Record<string, unknown>

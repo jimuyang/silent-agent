@@ -14,6 +14,7 @@ import { registerTabIpc } from './tab'
 import { registerFileIpc } from './file'
 import { registerReviewIpc } from './review'
 import { registerChatIpc } from './chat'
+import { registerLayoutIpc } from './layout'
 
 export interface IpcDeps {
   registry: AgentRegistry
@@ -31,6 +32,7 @@ export function registerAllIpc(deps: IpcDeps) {
   registerTabIpc()
   registerFileIpc(deps.storage)
   registerReviewIpc(deps.storage)
+  registerLayoutIpc(deps.storage)
   // chat handler 全局注册,每个窗口的 ChatManager 在 main/index.ts 里 registerChatManager
   registerChatIpc()
 }

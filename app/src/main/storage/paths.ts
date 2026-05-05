@@ -94,6 +94,10 @@ export const workspaceEventsFile = (wsPath: string) =>
 export const workspaceTabsFile = (wsPath: string) =>
   join(workspaceRuntimeDir(wsPath), FILES.TABS_INDEX)
 
+/** `.silent/runtime/layout.json` —— 主区分栏比例 + 后续布局状态 */
+export const workspaceLayoutFile = (wsPath: string) =>
+  join(workspaceRuntimeDir(wsPath), FILES.LAYOUT)
+
 /** `.silent/runtime/state/` —— runtime cache(cookies / last-active.json / cache/) */
 export const workspaceStateDir = (wsPath: string) =>
   join(workspaceRuntimeDir(wsPath), RUNTIME_SUBDIRS.STATE)

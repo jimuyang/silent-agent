@@ -38,6 +38,8 @@ export const FILES = {
   EVENTS: 'events.jsonl',
   /** Tab 索引(UI 状态) */
   TABS_INDEX: 'tabs.json',
+  /** 主区分栏比例 + 后续布局状态(per-workspace) */
+  LAYOUT: 'layout.json',
   /** Terminal pty raw 数据流 */
   BUFFER_LOG: 'buffer.log',
 } as const
@@ -52,6 +54,10 @@ export const RUNTIME_SUBDIRS = {
 /** silent-chat 作为 tab 的保留 id + path 常量(path 相对 workspace 根)
  *  指向 main_chat agent 的对话流(在 runtime/ 内) */
 export const SILENT_CHAT_TAB_ID = 'silent-chat'
+
+/** Pane 默认 id(长期稳定,持久化到 layout.json 不会变) */
+export const PANE_ID_LEFT = 'pane-0'
+export const PANE_ID_RIGHT = 'pane-1'
 export const SILENT_CHAT_TAB_PATH = `${SILENT_DIR}/${RUNTIME_DIR}/${FILES.MAIN_CHAT}`
 
 /** browser/terminal tab 产物子目录(.silent/runtime/tabs/<tid>/,装 snapshots + buffer.log) */

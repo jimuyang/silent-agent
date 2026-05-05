@@ -9,6 +9,8 @@ import { IPC } from '@shared/ipc'
 import type { TabManager, OpenTabArgs } from '../tabs/manager'
 
 export type TabTypeChoice = 'browser' | 'terminal' | 'file' | 'file-new' | null
+/** 右键 tab 后的语义动作 */
+export type TabContextChoice = 'split-right' | 'split-down' | 'close' | null
 
 // windowId → TabManager
 const managers = new Map<number, TabManager>()
@@ -46,6 +48,10 @@ export function registerTabIpc() {
     return managerFor(event).close(tabId)
   })
 
+  ipcMain.handle(IPC.TAB_DUPLICATE, async (event, tabId: string) => {
+    return managerFor(event).duplicate(tabId)
+  })
+
   ipcMain.handle(IPC.TAB_FOCUS, async (event, tabId: string) => {
     return managerFor(event).focus(tabId)
   })
@@ -56,9 +62,27 @@ export function registerTabIpc() {
       event,
       bounds: { x: number; y: number; width: number; height: number },
     ) => {
+      // [DEPRECATED] 单 view 模型,保留兼容。新代码走 TAB_SET_BOUNDS_FOR。
       managerFor(event).setBounds(bounds)
     },
   )
+
+  ipcMain.handle(
+    IPC.TAB_SET_BOUNDS_FOR,
+    async (
+      event,
+      payload: {
+        tabId: string
+        bounds: { x: number; y: number; width: number; height: number }
+      },
+    ) => {
+      managerFor(event).setBoundsFor(payload.tabId, payload.bounds)
+    },
+  )
+
+  ipcMain.handle(IPC.TAB_HIDE_TAB, async (event, tabId: string) => {
+    managerFor(event).hideTab(tabId)
+  })
 
   ipcMain.handle(IPC.TAB_HIDE_ALL, async (event) => {
     managerFor(event).hideAll()
@@ -104,6 +128,48 @@ export function registerTabIpc() {
   // 弹原生 OS 菜单选新建 tab 的类型。
   // 原生菜单是 OS 级绘制,不参与 Electron 窗口的 z-index / native overlay,
   // 所以即便有 WebContentsView(browser tab)覆盖,菜单也能正常显示。
+  // 在某 tab 上右键弹原生 context menu。caller 只需告诉是否可关。
+  // 拆右 / 拆下永远可用(把这个 tab 拆到新 pane)。
+  ipcMain.handle(
+    IPC.TAB_POPUP_CONTEXT_MENU,
+    async (event, payload: { canClose: boolean }) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) return null
+
+      return await new Promise<TabContextChoice>((resolve) => {
+        let chosen: TabContextChoice = null
+        const items: Electron.MenuItemConstructorOptions[] = [
+          {
+            label: '⊞   拆到右侧 pane',
+            click: () => {
+              chosen = 'split-right'
+            },
+          },
+          {
+            label: '⊟   拆到下侧 pane',
+            click: () => {
+              chosen = 'split-down'
+            },
+          },
+        ]
+        if (payload.canClose) {
+          items.push({ type: 'separator' })
+          items.push({
+            label: '✕   关闭 tab',
+            click: () => {
+              chosen = 'close'
+            },
+          })
+        }
+        const menu = Menu.buildFromTemplate(items)
+        menu.on('menu-will-close', () => {
+          setTimeout(() => resolve(chosen), 0)
+        })
+        menu.popup({ window: win })
+      })
+    },
+  )
+
   ipcMain.handle(IPC.TAB_POPUP_TYPE_MENU, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return null

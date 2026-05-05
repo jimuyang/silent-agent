@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   CreateWorkspaceArgs,
   ReviewResult,
+  WorkspaceLayout,
   WorkspaceMeta,
   TabMeta,
 } from '../shared/types'
@@ -52,13 +53,20 @@ const api = {
       ipcRenderer.invoke(IPC.TAB_LIST, workspaceId) as Promise<TabMeta[]>,
     open: (workspaceId: string, args: OpenTabArgs) =>
       ipcRenderer.invoke(IPC.TAB_OPEN, { workspaceId, args }) as Promise<TabMeta>,
+    duplicate: (tabId: string) =>
+      ipcRenderer.invoke(IPC.TAB_DUPLICATE, tabId) as Promise<TabMeta>,
     close: (tabId: string) =>
       ipcRenderer.invoke(IPC.TAB_CLOSE, tabId) as Promise<void>,
     focus: (tabId: string) =>
       ipcRenderer.invoke(IPC.TAB_FOCUS, tabId) as Promise<void>,
     hideAll: () => ipcRenderer.invoke(IPC.TAB_HIDE_ALL) as Promise<void>,
+    hideTab: (tabId: string) => ipcRenderer.invoke(IPC.TAB_HIDE_TAB, tabId) as Promise<void>,
     setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
       ipcRenderer.invoke(IPC.TAB_SET_BOUNDS, bounds) as Promise<void>,
+    setBoundsFor: (
+      tabId: string,
+      bounds: { x: number; y: number; width: number; height: number },
+    ) => ipcRenderer.invoke(IPC.TAB_SET_BOUNDS_FOR, { tabId, bounds }) as Promise<void>,
     navigate: (tabId: string, url: string) =>
       ipcRenderer.invoke(IPC.TAB_NAVIGATE, { tabId, url }) as Promise<void>,
     switchWorkspace: (workspaceId: string) =>
@@ -67,6 +75,29 @@ const api = {
       ipcRenderer.invoke(IPC.TAB_POPUP_TYPE_MENU) as Promise<
         'browser' | 'terminal' | 'file' | 'file-new' | null
       >,
+    popupContextMenu: (state: { canClose: boolean }) =>
+      ipcRenderer.invoke(IPC.TAB_POPUP_CONTEXT_MENU, state) as Promise<
+        'split-right' | 'split-down' | 'close' | null
+      >,
+    // 订阅 main 主动建 tab 的事件(目前唯一来源:browser-tab window.open 拦截 → sibling tab)。
+    // 返回 unsubscribe 函数,组件卸载时调。
+    onOpened: (
+      handler: (payload: {
+        workspaceId: string
+        meta: TabMeta
+        /** 触发 window.open 的源 tab id —— 让 renderer 把新 tab 落到源 tab 所在的 pane */
+        parentTabId?: string
+      }) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        payload: { workspaceId: string; meta: TabMeta; parentTabId?: string },
+      ) => handler(payload)
+      ipcRenderer.on(IPC.TAB_OPENED, listener)
+      return () => {
+        ipcRenderer.off(IPC.TAB_OPENED, listener)
+      }
+    },
   },
 
   // 文件相关:原生 picker + 读写 + 在 workspace 下新建
@@ -81,6 +112,14 @@ const api = {
       ipcRenderer.invoke(IPC.FILE_LIST_DIR, absPath) as Promise<
         Array<{ name: string; isDir: boolean }>
       >,
+  },
+
+  // 主区分栏布局(per-workspace,持久化到 .silent/runtime/layout.json)
+  layout: {
+    get: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.LAYOUT_GET, workspaceId) as Promise<WorkspaceLayout>,
+    set: (workspaceId: string, layout: Partial<WorkspaceLayout>) =>
+      ipcRenderer.invoke(IPC.LAYOUT_SET, { workspaceId, layout }) as Promise<WorkspaceLayout>,
   },
 
   // Review: spawn `claude -p` 在 workspace 跑 review,返回 markdown 建议 + session id

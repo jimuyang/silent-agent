@@ -6,9 +6,26 @@
 // 它是 native overlay,不是 DOM, 所以渲染时盖在 React 上面,我们通过 setBounds 定位。
 
 import { WebContentsView, BrowserWindow } from 'electron'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import type { BrowserTabState, TabMeta } from '@shared/types'
 
+
+// ESM 下推导 __dirname,定位编译产物 out/preload/browser-tab.mjs
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const BROWSER_TAB_PRELOAD = join(__dirname, '../preload/browser-tab.mjs')
+
 const OFFSCREEN = { x: -99999, y: 0, width: 0, height: 0 }
+
+interface ClickPayload {
+  tag: string
+  role: string
+  name: string
+  selector: string
+  host: string
+  modifiers: string[]
+}
 
 export class BrowserTabRuntime {
   readonly view: WebContentsView
@@ -18,8 +35,15 @@ export class BrowserTabRuntime {
     this.meta = meta
     const state = (meta.state as BrowserTabState | null) ?? { url: 'about:blank' }
 
-    // 新建 WebContentsView。webPreferences 可加但默认已经 contextIsolation,对观察足够。
-    this.view = new WebContentsView()
+    // 新建 WebContentsView。装 browser-tab-preload 监听 click(只观察,不暴露 API 到 page)。
+    // contextIsolation 默认 true,preload 跑 isolated world;sandbox: false 让 preload 能用 ipcRenderer。
+    this.view = new WebContentsView({
+      webPreferences: {
+        preload: BROWSER_TAB_PRELOAD,
+        contextIsolation: true,
+        sandbox: false,
+      },
+    })
 
     // 加入窗口 content view 层级(不加看不到)
     window.contentView.addChildView(this.view)
@@ -67,6 +91,36 @@ export class BrowserTabRuntime {
         meta: { title: this.view.webContents.getTitle() },
       })
     })
+
+    // [main] target=_blank / window.open / Cmd-click 拦截。
+    // 默认 Electron 38 行为是 'allow' → 起一个裸 BrowserWindow(无 chrome、无 preload,
+    // 形成 observation 盲区)。我们改成 deny + 通知 manager 在同 workspace 起 sibling
+    // browser tab,新 tab 自动带 preload + 进 events.jsonl。
+    this.view.webContents.setWindowOpenHandler((details) => {
+      this.onWindowOpen?.({ url: details.url, disposition: details.disposition })
+      return { action: 'deny' }
+    })
+
+    // [main] preload 通过 ipcRenderer.send('silent:click', payload) 推过来的 click 事件;
+    // webContents.ipc.on 是 per-WC IPC(Electron 28+),只接当前 webContents 的消息,
+    // 天然带 tabId 上下文,无需在主进程反查 sender。
+    this.view.webContents.ipc.on('silent:click', (_e, payload: ClickPayload) => {
+      const summary = formatClickSummary(payload)
+      this.onWorkspaceEvent?.({
+        source: 'browser',
+        action: 'click',
+        target: payload.name ? `${payload.role}: ${payload.name}` : payload.role,
+        meta: {
+          summary,
+          tag: payload.tag,
+          role: payload.role,
+          name: payload.name,
+          selector: payload.selector,
+          host: payload.host,
+          ...(payload.modifiers.length > 0 && { modifiers: payload.modifiers }),
+        },
+      })
+    })
   }
 
   /** 由 manager 注入, title/url 变化时回调触发持久化 */
@@ -79,6 +133,8 @@ export class BrowserTabRuntime {
     target?: string
     meta?: Record<string, unknown>
   }) => void
+  /** 由 manager 注入,page 触发 window.open / target=_blank 时改派为同 workspace 的 sibling tab */
+  onWindowOpen?: (info: { url: string; disposition: string }) => void
 
   show(bounds: { x: number; y: number; width: number; height: number }) {
     this.view.setBounds({
@@ -121,4 +177,11 @@ function hostFromUrl(url: string): string {
   } catch {
     return url.slice(0, 80)
   }
+}
+
+/** click 事件 → events.jsonl meta.summary 一行简介,< 200 字符 */
+function formatClickSummary(p: ClickPayload): string {
+  const desc = p.name ? `${p.role} "${p.name}"` : p.role
+  const mods = p.modifiers.length > 0 ? `[${p.modifiers.join('+')}] ` : ''
+  return `${mods}click ${desc} on ${p.host}`.slice(0, 199)
 }

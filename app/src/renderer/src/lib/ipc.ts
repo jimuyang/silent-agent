@@ -11,6 +11,7 @@ export const ipc = {
   file: window.api.file,
   review: window.api.review,
   chat: window.api.chat,
+  layout: window.api.layout,
 }
 
 export type IpcClient = typeof ipc
