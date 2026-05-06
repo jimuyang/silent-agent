@@ -9,7 +9,7 @@
 - **关系层**:AI-push 范式 — AI 主动观察用户产物 → 发现重复 pattern → 说"教教我",**外置元认知**。所有 pull 范式产品的天花板 = 用户元认知上限,Silent Agent 是结构性突破口。
 - **观察层**:Artifact-first — 只看**产物**(commit、文件、文档、消息、URL、命令),不看过程(键盘敲击、鼠标点击)。产物 = 用户大脑去噪后的决策,信噪比高一个数量级。
 - **形态层**:**轻工作区** — 不是 menubar、不是目的地,是介于两者之间的"任务文件夹 + 内嵌三件套(浏览器/终端/文件)+ AI 侧栏"。打开 = 隐式授权观察,关闭 = 不观察。
-- **哲学**:Everything is file — 事件 / skill / 状态 / 产出全落盘为文件,可 git、可 diff、可 rewind。
+- **哲学**:Everything is file — 事件 / skill / 状态 / 产出全落盘为文本文件,可 diff、可 grep、可备份。**用户产物进 git**(silent agent 借用),**silent agent 私域(`.silent/`)整个 gitignore**,两条时间轴互不串扰。
 - **三大空间**:observe(file watcher / 浏览器 CDP / 终端 hook)→ learn(pattern → skill)→ act(用户自做 + agent 执行)。
 - **护城河**:工作区内的 full-artifact 观察 × AI-push × skill 沉淀,这三件事**没有任何一家同时做**。Cursor / Claude Code 是 pull,Screenpipe 有观察无边界,cmux 等终端壳有壳无魂。
 
@@ -19,7 +19,7 @@
 > 为 Agent 提供**观察**你的产物、**学习**你的 pattern、**操作**你的文件 / 网页 / 命令三种空间。
 > 当期任务搬进来,Agent 静默跟随;
 > 产出推回飞书 / GitHub / Figma,skill 留下来继续成长。
-> Everything is file——所有状态、事件、产物都可 diff、可 rewind、可 git。
+> Everything is file——所有状态、事件、产物都是文本文件,可 diff、可 grep、可备份;用户产物进 git,silent agent 内部数据保持私域。
 
 ---
 
@@ -359,7 +359,7 @@ flowchart TB
     style A fill:#1a3a5c,color:#fff
 ```
 
-**Observe** —— 内嵌浏览器(Electron `WebContentsView`)/ 终端 hook(node-pty),应用内事件统一通过 `vcs.emit(...)` 落 `<workspace>/.silent/runtime/events.jsonl`(timeline 不进 git,git 只管 workspace 真状态)。用户外部文件编辑由 git 在下次 commit 时懒发现,**不实时监听**。**核心边界**:不观察工作区之外。
+**Observe** —— 内嵌浏览器(Electron `WebContentsView`)/ 终端 hook(node-pty),应用内事件统一通过 `vcs.emit(...)` 落 `<workspace>/.silent/runtime/events.jsonl`(整个 `.silent/` 不进 git,git 只追用户文件)。用户外部文件编辑由 git 在 idle 30s 时懒发现,**不实时监听**。**核心边界**:不观察工作区之外。
 
 **Learn** —— 事件流 → Pattern 检测(MVP 直接 LLM 摘要,后期补 sequence mining)→ "教教我"仪式(结构化 3 问)→ skill yaml 落 `<agent>/skills/`。
 
@@ -371,11 +371,11 @@ flowchart TB
 
 ```
 <workspace 目录>/
-├── .silent/                        ← 工作区标识(类比 .git/)
-│   ├── meta.yaml                   ✅ git: 工作区配置
-│   ├── tabs/<tid>/latest.md        ✅ git: browser 当前页面
-│   ├── tabs/<tid>/latest-cmd.log   ✅ git: terminal 最近命令输出
-│   └── runtime/                    ❌ .gitignore: 整目录(logs / cache / 历史)
+├── .silent/                        ← 工作区标识(类比 .git/)❌ gitignore 整个目录
+│   ├── meta.yaml                   workspace 配置(silent agent 私域)
+│   ├── tabs/<tid>/latest.md        browser 当前页面 copy
+│   ├── tabs/<tid>/latest-cmd.log   terminal 最近命令 copy
+│   └── runtime/                    per-worktree 运行时状态
 │       ├── events.jsonl            timeline log
 │       ├── main_chat.jsonl         main_chat agent 对话流
 │       ├── main_review.jsonl       review agent 对话流
@@ -385,16 +385,17 @@ flowchart TB
 └── <用户的任何文件>                   ✅ git: notes.md / data.csv / src/ / ...
 ```
 
-二分约定:`.silent/` 顶层进 git(workspace 真状态),`.silent/runtime/` 整子目录 .gitignore(详见 02-architecture.md / 08-vcs.md)。
+二分约定:**git 只追用户文件;整个 `.silent/` gitignore**,silent agent 不在用户的 git history 里留痕(详见 02-architecture.md / 08-vcs.md / 10-multi-agent-isolation.md)。
 
 带来的性质:
 
 | 性质 | 说明 |
 |---|---|
-| **Git-friendly** | workspace 真状态 + 用户文件进 git;timeline / 历史走独立 append-only 流(两轴互补,详见 08-vcs.md) |
-| **Rewindable** | 看产物演进 → `git log -p tabs/<tid>/latest.md`;看时序 → `cat runtime/events.jsonl` |
+| **Git-clean** | git history 只有用户产物 commit,无 silent agent 噪音;用 GitHub Desktop / `git log` 看到的就是用户工作 |
+| **Worktree-ready** | `.silent/` 不进 git → bg agent fork worktree 时 silent 私域天然 per-worktree,merge 不冲突 |
+| **Rewindable** | 看用户产物 → `git log`;看 silent agent 观察 → `cat runtime/events.jsonl` + `ls runtime/tabs/<tid>/snapshots/` |
 | **Debuggable** | Agent 行为异常?直接读 JSONL,不用进数据库 |
-| **Portable** | 换电脑、备份、给同事看,都是拷贝文件夹 |
+| **Portable** | 换电脑、备份、给同事看,都是拷贝文件夹(jsonl 不在 git,需 tar 整目录) |
 | **Scriptable** | grep / jq / sed 就能分析事件流 |
 | **AI-readable** | 下一个版本的 Agent 读同样的文件就能接手 |
 

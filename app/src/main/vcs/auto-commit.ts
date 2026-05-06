@@ -2,16 +2,17 @@
 //
 // Tier 1 auto-commit 规则引擎 + IdleTimer + Debouncer。
 //
-// 设计完整规则(design/08-vcs.md §3,详见 TIER1_RULES_FULL):
-//   - chat.turn-end       0ms debounce(Phase 6 chat 接入后才触发)
-//   - browser.load-finish 1s  debounce(合并 SPA 多帧)
-//   - shell.exit          0ms 每命令独立 commit
-//   - workspace.idle      0ms idle 30s 兜底(commit if dirty)
+// 设计原则(design/08-vcs.md §3):
+// **silent agent 默认不主动 commit**。整个 `.silent/` gitignore 后,原 4 条 Tier 1
+// 规则(chat.turn-end / browser.load-finish / shell.exit)都没东西可 commit;
+// 只剩 `workspace.idle` 一条**可选**(opt-in)给 worktree fork 提供干净 base。
 //
-// **MVP 默认不开 auto-commit**:DEFAULT_TIER1_RULES = []。VCS 实例仍 git init +
-// 写 .gitignore + initial commit,emit 仍 append events.jsonl,但不触发 Tier 1
-// auto commit。用户/agent 想动版本走 Tier 2 显式 vcs.commit() / branch() / checkout()。
-// 真要开 auto-commit 把 vcsFor 那一层传 { rules: TIER1_RULES_FULL } 即可。
+// 默认行为:`DEFAULT_TIER1_RULES = []`。VCS 实例仍 git init + 写 .gitignore +
+// initial commit(只追 .gitignore),emit 仍 append events.jsonl,但**不触发任何
+// auto commit**。用户 / agent 想动版本走 Tier 2 显式 `vcs.commit() / branch() /
+// checkout()`(由 main_chat 暴露成 `workspace.commit("<语义化 message>")` tool)。
+//
+// 想开 idle 兜底:`createWorkspaceVCS(path, { rules: TIER1_RULES_IDLE_ONLY })`。
 //
 // IdleTimer 在每次 emit 时 reset(workspace.idle 自身 emit 不 reset,防止死循环)。
 // Debouncer 按 rule.key 去重:同 rule 短时间多次触发只 commit 一次。
@@ -19,15 +20,16 @@
 import type { AutoCommitRule } from './interface'
 import type { WorkspaceEvent } from '@shared/types'
 
-/** 完整 Tier 1 规则集,MVP 不启用,留给后续 opt-in */
-export const TIER1_RULES_FULL: AutoCommitRule[] = [
-  { source: 'chat', action: 'turn-end', debounceMs: 0 },
-  { source: 'browser', action: 'load-finish', debounceMs: 1000 },
-  { source: 'shell', action: 'exit', debounceMs: 0 },
+/**
+ * Idle-only opt-in 规则集:30s 没活动 + dirty → 自动 commit 用户文件。
+ * 给 worktree fork 提供干净 base / 给用户文件改动一个轻量 checkpoint。
+ * 默认不启用(`DEFAULT_TIER1_RULES = []`),需显式传入。
+ */
+export const TIER1_RULES_IDLE_ONLY: AutoCommitRule[] = [
   { source: 'workspace', action: 'idle', debounceMs: 0 },
 ]
 
-/** MVP 默认空 = 不 auto-commit;只有用户 / agent 显式 vcs.commit() 才进版本 */
+/** 默认空 = silent agent 不主动 commit;只有用户 / agent 显式 vcs.commit() 才写 git history */
 export const DEFAULT_TIER1_RULES: AutoCommitRule[] = []
 
 export const IDLE_COMMIT_MS = 30_000

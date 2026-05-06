@@ -164,29 +164,34 @@ classDiagram
 
 关键约定:
 - **不再分类型** — 所有 workspace 都是工作区,区别只是"下面有哪些文件"
-- **Tab 自己管产物快照 / 版本**,落在 `tabs/<tid>/` 子目录里
+- **Tab 自己管产物快照 / 版本**,落在 `.silent/runtime/tabs/<tid>/` 子目录里(silent agent 私域)
 - **Events 是 workspace 级**,单一 `events.jsonl` 记所有跨 tab 动作(tab focus/open/close 本身就是事件)
-- **Git 提供版本管理** —— 每 workspace 一个 repo,auto-commit + agent-curator 两层策略
+- **Git 只追用户文件** —— 每 workspace 一个 repo(为支持 worktree),`.silent/` 整个 gitignore;**silent agent 默认不主动 commit**(Tier 1 = 0 条),git history 由 agent 显式 Tier 2 commit + 用户自己 commit 构成;idle 兜底是 opt-in 工具
 - **`linkedFolder` 是 workspace 可选的外部挂载** —— 不纳入 workspace repo,只在 events 里记其 HEAD SHA
 
 ```
-事件(events.jsonl)          ← "发生了什么"
+事件(.silent/runtime/events.jsonl)  ← silent agent 的完整观察(timeline)
   ↕ 按 ts + tabId 引用
-产物(tabs/<tid>/…)          ← "长什么样"
-  ↕ 在自然边界触发
-git commit                   ← "这个时刻的 snapshot"
-  → git log / git diff       ← "用户 & agent 都能回放的时间线"
+观察产物(.silent/runtime/tabs/<tid>/…)  ← "长什么样"(snapshots / latest.* / buffer)
+  ━ 不进 git,silent agent 私域
+
+用户文件(notes.md / src/ / ...)     ← "用户做出的真东西"
+  ↕ silent agent 不主动 commit(默认);agent 改后调 Tier 2 显式 commit;用户自己 commit
+git commit                            ← "用户产物的版本锚点"
+  → git log / git diff                ← "用户工作的清晰版本时间线"
+
+→ 两轴独立:silent 观察走 events.jsonl,用户产物走 git history,各司其职。
 ```
 
 ### Tab 的 `{type, path}` 映射
 
 | type | `path` | 产物内部 | 谁产生 |
 |---|---|---|---|
-| `silent-chat` | `main_chat.jsonl` | append-only 流(不进 git) | main_chat agent 与用户对话 |
-| `browser` | `tabs/<tid>/` | `snapshots/NNN.md` + `latest` symlink | `did-finish-load` 后抽 readability |
-| `terminal` | `tabs/<tid>/` | `buffer.log`(append) + `snapshots/NNN.log`(命令边界) | `pty.onData` + preexec/exit |
-| `file` (内部) | `workspaces/<wid>/<path>` | 文件本身 | 用户 save |
-| `file` (外部) | 绝对路径 | 文件本身(workspace 外) | 用户 save(外部 git 管) |
+| `silent-chat` | `.silent/runtime/main_chat.jsonl` | append-only 流(`.silent/` 整个不进 git) | main_chat agent 与用户对话 |
+| `browser` | `.silent/tabs/<tid>/` | `latest.md`(顶层 copy) + `runtime/tabs/<tid>/snapshots/NNN.md`(历史) | `did-finish-load` 后抽 readability |
+| `terminal` | `.silent/tabs/<tid>/` | `latest-cmd.log`(顶层 copy) + `runtime/tabs/<tid>/{snapshots/NNN.log, buffer.log}` | `pty.onData` + preexec/exit |
+| `file` (内部) | `workspaces/<wid>/<path>` | 文件本身(✅ git) | 用户 save |
+| `file` (外部) | 绝对路径 | 文件本身(workspace 外,外部 git 自管) | 用户 save |
 
 ### 分栏(Split Layout)演进路线
 
@@ -235,44 +240,51 @@ MVP 主区有两种显示模式:
 
 ### 版本管理 + Events 设计 → 详见 [08-vcs.md](08-vcs.md)
 
-每个 workspace 目录自动 `git init`,作为独立 repo。**Workspace 版本 = git commit SHA**。
+每个 workspace 目录自动 `git init`,作为独立 repo —— 但 git 只追**用户文件**,不追 silent agent 的运行时数据(`.silent/` 整个 gitignore)。**git history = 用户产物的版本序列**,silent agent 不在其中留痕。
 
-`WorkspaceVCS` 是 workspace 同级暴露的能力对象,提供 `emit / commit / log / diff / show / status / branch / checkout`。Auto-commit 4 条 Tier 1 规则在边界事件(turn-end / load-finish / shell.exit / idle 30s)触发。完整设计见 **[08-vcs.md](08-vcs.md)**。
+为什么仍主动 git init:**worktree 是后台 agent 隔离的根基,必须有 git repo**(详见 [10-multi-agent-isolation.md](10-multi-agent-isolation.md))。
 
-#### `.silent/` 二分:`<workspace>/.silent/` 顶层(git)+ `.silent/runtime/` 子目录(.gitignore)
+`WorkspaceVCS` 是 workspace 同级暴露的能力对象,提供 `emit / commit / log / diff / show / status / branch / checkout` + worktree 操作。**Auto-commit 默认 0 条规则** —— silent agent 不主动写 git history;`.silent/` 不进 git 后原 4 条 Tier 1 规则全部失效,唯一仍有意义的 `workspace.idle` 改成 opt-in 常量(`TIER1_RULES_IDLE_ONLY`)。git history 由两类来源构成:agent 显式 Tier 2 commit(`workspace.commit("...")`)+ 用户自己 commit。完整设计见 **[08-vcs.md](08-vcs.md)**。
 
-`<workspace>/` 内文件按"是否需要内容版本化"二分,**git 边界 = `.silent/runtime/` 子目录边界**:
+#### `.silent/` 二分:整个 `.silent/` 不进 git · git 只追用户文件
+
+`<workspace>/` 内文件按"是不是 silent agent 的私域"二分,**git 边界 = `.silent/` 目录边界**:
 
 | 位置 | 进 git? | 内容 |
 |---|---|---|
-| `用户文件 / src / 任意用户产物` | ✅ | 用户的工作内容 |
-| `.silent/meta.yaml` | ✅ | workspace 配置(name / linkedFolder),低频 |
-| `.silent/tabs/<tid>/latest.md` | ✅ | browser tab 当前页面(Defuddle 抽出),`load-finish` 时整体 cp |
-| `.silent/tabs/<tid>/latest-cmd.log` | ✅ | terminal tab 最近一次命令完整输出,`shell.exit` 时整体 cp |
-| `agents/<aid>/skills/*.yaml` | ✅ | skill 定义(用户/agent 沉淀的资产) |
-| **`.silent/runtime/`** ↓ | ❌ `.gitignore`(整个子目录) | runtime / logs / cache 全部 |
+| `用户文件 / src / 任意用户产物` | ✅ | 用户的工作内容(silent agent 不该越过此边界) |
+| `agents/<aid>/skills/*.yaml`(在用户 home 下,不在 workspace 内) | — | skill 定义,跟 workspace git 无关,跨设备同步走 silent agent 自己的 sync layer |
+| **`.silent/`** ↓ | ❌ `.gitignore`(整个目录) | silent agent 私域,无论顶层 / runtime 都不进 git |
+| `.silent/meta.yaml` | ❌ | workspace 配置(id / name / createdAt),bg worktree 由 silent agent 主动 cp 同步 |
+| `.silent/tabs/<tid>/latest.md` | ❌ | browser tab 当前页面(Defuddle 抽出),per-worktree 视角 |
+| `.silent/tabs/<tid>/latest-cmd.log` | ❌ | terminal tab 最近一次命令完整输出,per-worktree 视角 |
 | `.silent/runtime/events.jsonl` | ❌ | workspace 时序日志(2 层结构,Layer 1) |
 | `.silent/runtime/main_chat.jsonl` | ❌ | main_chat agent 对话流 |
 | `.silent/runtime/main_review.jsonl` | ❌ | main_review agent 对话流 |
-| `.silent/runtime/tabs.json` | ❌ | tab 索引(UI 状态,disk 当前态恢复) |
+| `.silent/runtime/tabs.json` | ❌ | tab 索引(UI 状态,per-worktree 视角) |
 | `.silent/runtime/tabs/<tid>/snapshots/NNN-*.{md,log}` | ❌ | 历史快照序列(序列本身已是 log) |
 | `.silent/runtime/tabs/<tid>/buffer.log` | ❌ | pty raw 流(信息冗余在 NNN-cmd.log) |
 | `.silent/runtime/state/{cookies,cache,last-active.json,...}` | ❌ | runtime cache / 隐私 |
 
-**核心约定**:**git 只管"workspace 当前真状态"** —— 用户内容 + 配置 + 每个 tab 的 latest 当前态。**所有时序 / 历史 / 派生品全部进 `.silent/runtime/`**。
+> 注:`latest.*` 物理位置在 `.silent/tabs/<tid>/` 顶层(原 5c+ 迁移结果保留),不挪到 `runtime/` 下;只是 `.gitignore` 从原"`.silent/runtime/`"扩到"`.silent/`",让顶层的 latest.* / meta.yaml 一并不进 git。代码层 `paths.ts` 不动。
+
+**核心约定**:**git 只追用户文件,silent agent 不在 git history 里留痕**。workspace 身份靠 `.silent/` 目录是否存在判断(类比 `.git/`),不靠 meta.yaml 是否进 git。
 
 `.gitignore` 简化到一行:
 ```gitignore
-.silent/runtime/
+.silent/
 ```
 
-**为什么 runtime 不进 git**:
-1. **append-only 流(events / main_chat / main_review)** —— 本身已是 monotonic truth,git pack 不会比 cat 文件便宜;任意时刻 `head -n <line>` 取那一刻状态
-2. **历史 NNN 切片(snapshots/)** —— 序列由 NNN 排序就是 log,不需要 git 加额外时间维度
-3. **buffer.log / cache** —— 高频 / 派生 / 可重建
-4. **tabs.json** —— UI 状态,从 disk 当前态恢复就够;改动太频繁(focus/url 变),git 永远 dirty
+**为什么整个 .silent/ 不进 git**:
 
-时点查询 = `git checkout <sha>`(产物)+ `cat .silent/runtime/events.jsonl | jq 'select(.ts < t)'`(timeline)。两轴独立,不串扰。
+1. **多 worktree 模型下的语义正确性**(决定性论据):per-agent 视角的文件(`tabs.json` / `latest.md` / `latest-cmd.log` / `events.jsonl` / `main_chat.jsonl`)在 main_chat 和 bg agent 之间**不是同一语义对象的两个版本**,git merge 假设不成立 → 详见 [10-multi-agent-isolation.md §3.1](10-multi-agent-isolation.md)
+2. **runtime 流本身就是 monotonic truth**:append-only(events / main_chat / main_review)和 immutable NNN 切片(snapshots/)不需要 git 加额外时间维度,`head -n <line>` / `ls snapshots/` 就够
+3. **buffer.log / cache** —— 高频 / 派生 / 可重建
+4. **meta.yaml** —— bg worktree fork 时 cp 一份就够,字段(id / name / createdAt)本来就不需要"演化历史"
+
+**worktree 必需性 ≠ git history 需要 silent 数据**:silent agent 仍主动 `git init`(因为 worktree 必须是 git repo),但**不主动写 git history** —— 仅在用户产物(用户文件)有真实变化时由"workspace.idle 30s + dirty"兜底 commit;agent 改用户文件时显式 Tier 2 commit。silent agent 自己的运行时数据(.silent/)永远不进 git。
+
+时点查询 = `git checkout <sha>`(用户文件)+ `cat .silent/runtime/events.jsonl | jq 'select(.ts < t)'`(timeline)。两轴完全独立,git history 极薄,timeline 完整。
 
 #### Events 2 层结构(强约定)
 
@@ -318,12 +330,12 @@ interface WorkspaceEvent {
 
 ### 每 workspace 两个 agent · main_chat 与 main_review
 
-每个 workspace 同时有两个 LLM agent 角色,各自有独立 append stream:
+每个 workspace 同时有两个 LLM agent 角色,各自有独立 append stream(都在 `.silent/runtime/` 下,**整个 `.silent/` 不进 git**):
 
-| Agent | 落盘文件(`.silent/`,**不进 git**) | 触发 | session 持久化 |
+| Agent | 落盘文件 | 触发 | session 持久化 |
 |---|---|---|---|
-| **main_chat** | `main_chat.jsonl` | 用户主动输入(SilentChat 问答区) | ✅ workspace 重开续接(v0.2 实装,MVP 暂每次新会话) |
-| **main_review** | `main_review.jsonl` | 系统调用(idle / 手动 Review / 凌晨) | ❌ 用完即弃,每次 fresh session |
+| **main_chat** | `.silent/runtime/main_chat.jsonl` | 用户主动输入(SilentChat 问答区) | ✅ workspace 重开续接(v0.2 实装,MVP 暂每次新会话) |
+| **main_review** | `.silent/runtime/main_review.jsonl` | 系统调用(idle / 手动 Review / 凌晨) | ❌ 用完即弃,每次 fresh session |
 
 `main_chat.jsonl` 取代了原 `messages.jsonl`(rename 时机:Phase 5 合并)。
 
@@ -438,19 +450,19 @@ interface ExecContext {
 │       └── workspaces/
 │           ├── _index.json             # [{id, path?}] —— path 在场表示外挂工作区
 │           └── <workspace-id>/         # ★ 一个工作区目录(同时也是 git repo)
-│               ├── .git/               # auto-init(Phase 5f)
-│               ├── .gitignore
-│               ├── .silent/                                ★ workspace 标识
-│               │   ├── meta.yaml                           ✅ git: 配置
+│               ├── .git/               # auto-init(支持 worktree;只追用户文件)
+│               ├── .gitignore          # 仅一行: .silent/
+│               ├── .silent/                                ❌ .gitignore 整个目录 · silent agent 私域
+│               │   ├── meta.yaml                           workspace 配置(id / name / createdAt)
 │               │   ├── tabs/
 │               │   │   └── <tid>/
-│               │   │       ├── latest.md                   ✅ git: browser 当前页面
-│               │   │       └── latest-cmd.log              ✅ git: terminal 最近命令输出
-│               │   └── runtime/                            ❌ .gitignore 整个子目录
+│               │   │       ├── latest.md                   browser 当前页面 copy(per-worktree 视角)
+│               │   │       └── latest-cmd.log              terminal 最近命令 copy(per-worktree 视角)
+│               │   └── runtime/                            per-worktree 运行时状态
 │               │       ├── events.jsonl                    timeline log (2 层 schema, Layer 1)
 │               │       ├── main_chat.jsonl                 main_chat agent 对话流
 │               │       ├── main_review.jsonl               review agent 对话流
-│               │       ├── tabs.json                       UI 状态(从 disk 当前态恢复)
+│               │       ├── tabs.json                       UI 状态(per-worktree 视角)
 │               │       ├── tabs/
 │               │       │   └── <tid>/
 │               │       │       ├── snapshots/NNN-<ts>.{md|log}  immutable 历史切片
@@ -464,28 +476,32 @@ interface ExecContext {
 **外挂工作区(addWorkspace)**:
 ```
 <任意路径>/<my-existing-project>/
-├── .git/                               # 用户原有
+├── .git/                               # 用户原有(silent agent 不接管,只借用追用户文件)
+├── .gitignore                          # silent agent 仅追加一行 ".silent/"(幂等,不动用户既有规则)
 ├── src/, package.json, ...             # 用户原有
-└── .silent/                            # ★ Silent Agent 写入的标识 + 产物
-    ├── meta.yaml
-    ├── main_chat.jsonl
-    └── ...                             # 同上
+└── .silent/                            ❌ gitignore · silent agent 私域
+    ├── meta.yaml                       workspace 配置
+    └── runtime/                        per-worktree 运行时状态
+        ├── main_chat.jsonl
+        ├── events.jsonl
+        └── ...                         # 同上方默认目录树
 ```
-- `addWorkspace(agentId, absPath, name?)` 在 `absPath/.silent/` 下创建标识 + 初始化产物
+- `addWorkspace(agentId, absPath, name?)` 在 `absPath/.silent/` 下创建标识 + 初始化 runtime 子目录
 - 在 agent 的 `workspaces/_index.json` 追加 `{id, path: absPath}` 记录
 - 之后 Storage 层用 `resolveWorkspacePath(agentId, workspaceId)` 把 workspaceId → 绝对路径(默认位置或外挂位置)
-- **不复制用户文件,不接管用户的 `.git/`**;用户的代码仓库还是用户自己的
+- **不复制用户文件,不接管用户的 `.git/`**;silent agent 借用用户的 git 做 worktree 隔离 + 偶发 idle commit,**永不主动写 `.silent/` 进 git history**
+- 若用户原 `.gitignore` 已含 `.silent/` 或 `.silent` 行,跳过追加
 
 **linkedFolder(D 方案,只记 ref)**:
 - 与 addWorkspace 不同 —— `linkedFolder` 是 workspace 内部 meta 字段,标记一个**观察锚**(只读引用),不在那里写 `.silent/`
 - `.gitignore` 不复制其内容,events.jsonl 定期 probe 记 HEAD SHA + dirty 状态
 
 - **JSONL 是真相源**,SQLite/index 只做缓存,删了能从 JSONL 重建
-- **一 workspace 一 git repo**:删 = `rm -rf`,分享 = tar 整目录(jsonl logs 不在 git 里 → `git bundle` 不够,需整目录复制)
+- **一 workspace 一 git repo**:删 = `rm -rf`,分享 = tar 整目录(`.silent/` 整个不在 git 里 → `git bundle` 不够,需整目录复制)
 - **原子写**:yaml/json 整文件写 `.tmp` + rename(POSIX 原子);jsonl 追加 + fsync
 - **List 优化**:`_index.json` 作为目录扫描 cache,启动时读,不命中再重建
-- **events / main_chat / main_review jsonl 不进 git** —— logs 是时序 truth,git 只管内容版本;两条独立时间轴互不干扰
-- **commit 在逻辑边界**(Tier 1 规则触发);若 git status 空(纯 chat turn 无产物变化)→ skip empty commit,events.jsonl 仍记录 timeline
+- **`.silent/` 整个不进 git** —— silent agent 私域跟用户的 git history 完全隔离;git 只追用户文件,workspace 身份靠 `.silent/` 目录是否存在判断
+- **commit 默认不主动**:silent agent 不写 git history(`DEFAULT_TIER1_RULES = []`);agent 改用户文件走 Tier 2 显式 `workspace.commit("<语义化 message>")`;`workspace.idle 30s + dirty` 兜底是 opt-in(`TIER1_RULES_IDLE_ONLY` 常量,用户/上层显式启用)
 
 ### StorageAdapter 接口(一等抽象)
 

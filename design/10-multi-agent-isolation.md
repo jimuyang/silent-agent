@@ -6,9 +6,11 @@
 
 ## TL;DR
 
-- **代码层隔离用 git worktree,边界 = workspace 整目录**(含 `.silent/`,各 worktree 各保留各的 `runtime/main_chat.jsonl` / `events.jsonl`)
+- **代码层隔离用 git worktree,边界 = workspace 整目录**(含 `.silent/`);**整个 `.silent/` 不进 git** → per-worktree 自然私有,无任何 silent 数据进入 merge
+- **核心论据**:per-agent 视角(`tabs.json` / `latest.*` / `events.jsonl` / `main_chat.jsonl`)在 worktree 模型下不是同一语义对象,git merge 假设不成立 → 全部进 `.silent/`(silent agent 私域,gitignore)
 - **分支命名约定**:`silent/<agent-id>/<task-slug>-<timestamp>`,例如 `silent/bg/refactor-auth-20260429-103022`
 - **worktree 落盘**:兄弟目录 `<workspace>.silent-bg/<task-slug>/`(不嵌套到 main worktree,避免污染 git status)
+- **fork 时 silent agent 主动**:cp main 的 `meta.yaml` 到 bg worktree(meta.yaml 不进 git → 不会被 git checkout 自动同步)+ 创建空 `runtime/` 骨架
 - **能力扩展**:[`WorkspaceVCS`](08-vcs.md) 加 4 个方法(`forkWorktree / listWorktrees / removeWorktree / mergeWorktree`)
 - **main_chat / main_review MVP 不分 worktree**(已串行 + review 只读 + fresh session,分了徒增复杂)
 - **main_chat 是 curator**:background agent 跑完 commit 自家分支,通知 main_chat → main_chat 决定 merge / apply / 丢弃
@@ -55,37 +57,59 @@
 
 ## 3. 核心决策
 
-### 3.1 worktree 边界 = workspace 整目录
+### 3.1 worktree 边界 = workspace 整目录 · 整个 `.silent/` 不进 git
 
 ```
 <workspace>/                         ← main worktree
-├── .git/                            (objects 共享)
-├── .silent/
-│   ├── meta.yaml                    ✅ git
-│   └── runtime/                     ❌ gitignore
-│       ├── main_chat.jsonl          ← main_chat 自己的对话流
-│       └── events.jsonl             ← main_chat 视角的 timeline
-└── (用户文件)
+├── .git/                            objects + refs 共享
+├── .silent/                         ❌ gitignore(整个目录,silent agent 私域)
+│   ├── meta.yaml                    workspace 配置(id / name / createdAt)
+│   └── runtime/                     per-worktree 运行时状态
+│       ├── main_chat.jsonl          ← main_chat 视角的对话流
+│       ├── events.jsonl             ← main_chat 视角的 timeline
+│       ├── tabs.json                ← UI 状态(打开了哪些 tab)
+│       ├── tabs/<tid>/
+│       │   ├── latest.md            ← "当前看的页面"
+│       │   ├── latest-cmd.log       ← "最近跑的命令"
+│       │   ├── snapshots/NNN-*      ← 历史切片
+│       │   └── buffer.log
+│       └── state/
+└── (用户文件)                        ✅ git
 
 <workspace>.silent-bg/refactor-auth-20260429-103022/   ← bg agent worktree
-├── .git                             (link file → 主 .git/worktrees/...)
-├── .silent/
-│   └── runtime/
-│       ├── main_chat.jsonl          ← bg agent 自己的对话流(独立)
-│       └── events.jsonl             ← bg agent 视角的 timeline(独立)
-└── (用户文件,checkout 到这个分支的版本)
+├── .git                             link file → 主 .git/worktrees/...
+├── .silent/                         ❌ gitignore(完全独立的 silent agent 私域)
+│   ├── meta.yaml                    fork 时 silent agent 主动 cp main 的 meta.yaml
+│   └── runtime/                     bg agent 自己初始化(空白起步)
+└── (用户文件,checkout 到该分支的版本)   ✅ git
 ```
 
-**为什么是「workspace 整目录」而不是「只 fork 用户产物」**:
+**核心论据:silent agent 的全部内部状态必须 per-worktree 私有 + 不进 git,否则 merge 会做语义错误**。
+
+`.silent/` 下所有文件都是 silent agent 的私域:
+
+- `meta.yaml` —— workspace 配置(id / name / createdAt),bg worktree 跟 main 一份拷贝即可,**不需要 git 协助同步**
+- `runtime/main_chat.jsonl` / `events.jsonl` —— per-agent 对话流和 timeline,bg 是 fresh session 应空白起步
+- `runtime/tabs.json` / `tabs/<tid>/latest.*` —— per-agent 当下视角(打开哪些 tab、看什么页面、刚跑什么命令)
+- `runtime/snapshots/` / `buffer.log` —— per-agent 观察历史
+
+这些**跨 worktree 不是同一个语义对象的两个版本**:
+
+- main_chat 的"当前看的页面"和 bg agent 的"当前看的页面"是两个独立真相
+- git merge 假设"两个分支的同名文件是同一对象的两个版本",对视角文件这条假设不成立
+- 进 git 后 merge 会语义错位:bg 跑 auth 重构时顺手浏览了 stackoverflow,merge 回来后 main_chat 读 latest.md 当 context 会以为用户在看 stackoverflow,实际用户屏幕上是 logservice
+- 边界更糟:bg 开了新 tab `br-99`,merge 后 main 多出一个 orphan `tabs/br-99/latest.md` 但 main 的 tabs.json 没这个 tid
+
+所以**不是文本冲突问题,是根本性的语义错位**。整个 `.silent/` 都是 silent agent 的私域,**git 边界 = `.silent/` 目录边界**。
 
 | 方案 | 评价 |
 |---|---|
 | ❌ 整 workspace 一个 worktree(共享) | 现状,无隔离 |
-| ✅ **每 agent 一个 worktree(整目录,含 `.silent/`)** | 干净:events / chat 各自一份,产物在各自分支演化,可合 |
-| ❌ 只 fork 用户产物,`.silent/runtime/` 共享 | events.jsonl 是 append-only,多写者撕裂 |
-| ❌ `.silent/runtime/` 放 worktree 外(共享) | 跨 worktree 同步噪音 + chat 历史串台 |
+| ✅ **每 agent 一个 worktree(整目录),进 git 仅用户文件,`.silent/` 整个不进 git** | 干净:silent agent 私域全 per-worktree,merge 只动用户文件,语义无冲突 |
+| ❌ 只 fork 用户产物,`.silent/runtime/` 共享 | events / chat / tabs.json 全部撕裂 + 视角串台 |
+| ❌ `.silent/` 部分进 git(meta.yaml / latest.\* 等,早期设计) | merge 时语义错位,main_chat 视角被 bg 污染 |
 
-`.silent/runtime/` 已经在 `.gitignore` 里(见 [08-vcs.md §1](08-vcs.md))→ 合并 worktree 时 runtime 自然不参与 merge,各 agent 的对话流互不干扰。
+**结论**:`.gitignore` 简化为一行 `.silent/`。git 只追用户文件,workspace 身份靠"`.silent/` 目录是否存在"判断(类比 `.git/`)。`meta.yaml` 在 fork 时由 silent agent 主动 cp 到 bg worktree;`runtime/` 由 bg agent 自己初始化。详见 [02-architecture.md](02-architecture.md) `.silent/` 边界 与 [08-vcs.md](08-vcs.md) git 角色。
 
 ### 3.2 分支命名约定
 
@@ -175,9 +199,11 @@ export interface WorktreeInfo {
 
 **实现要点**:
 - 用 `simple-git` 的 `raw(['worktree', 'add', ...])`(simple-git 当前没专属 worktree API,raw 即可)
-- forkWorktree 创建后**立刻在新目录写入 `.silent/runtime/` 骨架**(空 main_chat.jsonl / events.jsonl + `state/` 目录),让 bg agent 一启动就能 emit
+- forkWorktree 创建后,silent agent 主动做两件事(都在新 worktree 目录里):
+  1. **`cp <main>/.silent/meta.yaml <bg>/.silent/meta.yaml`** —— meta.yaml 不进 git,git worktree add 不会自动带过来,silent agent 必须主动同步(可加 `parent: <main-wid>` 字段标记派生关系)
+  2. **`mkdir -p <bg>/.silent/runtime/{tabs,state}` + 写空 main_chat.jsonl / events.jsonl** —— bg agent 一启动就能 emit
 - listWorktrees 用 `git worktree list --porcelain` 解析,叠加上分支命名解析出 agentId / taskSlug
-- removeWorktree 串行 `git worktree remove` + `git branch -d/-D`
+- removeWorktree 串行 `git worktree remove` + `git branch -d/-D`(`.silent/` 在 worktree 内,git worktree remove 直接清掉)
 
 ## 5. Background agent 流程
 
@@ -308,7 +334,7 @@ main_review 不写用户产物,不会跟 main_chat 物理冲突。强行分 work
 
 ## 11. Open Questions
 
-1. **bg agent 的 workspace identity**:bg worktree 里面那份 `.silent/meta.yaml` 是新生成还是复制 main 的?当前倾向**复制 main + 加 `parent: <main-wid>`字段**,让 bg worktree 也能被 `addWorkspace` 识别(用户能切过去看)
+1. ~~**bg agent 的 workspace identity**:bg worktree 里面那份 `.silent/meta.yaml` 是新生成还是复制 main 的?~~ → **已确定**:silent agent 在 fork 时主动 cp main 的 meta.yaml(因为 meta.yaml 不进 git,git worktree add 不会自动带过来),加 `parent: <main-wid>` 字段标记派生关系。详见 §4 实现要点
 2. **Cleanup 策略阈值**:N 天没活动自动 prompt 用户清?还是等磁盘满才管?MVP 不自动清,加 UI"清理"按钮即可
 3. **bg agent 是否可读 main_chat 的当前 transcript**:借给 LLM 做 context?可,但只读快照(fork 时刻的 transcript),避免运行中实时改动
 4. **mergeWorktree 是否要加 pre-merge LLM review**:让 main_chat 拿 diff 自动 summarize 给用户看?可放 v0.2,MVP 先纯 git

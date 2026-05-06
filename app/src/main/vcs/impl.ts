@@ -29,7 +29,7 @@ import type {
   WorkspaceVCS,
 } from './interface'
 
-const SILENT_GITIGNORE_LINE = '.silent/runtime/'
+const SILENT_GITIGNORE_LINE = '.silent/'
 
 export interface CreateVcsOpts {
   rules?: AutoCommitRule[]
@@ -179,12 +179,8 @@ export async function createWorkspaceVCS(
   const git = new GitWrapper(workspacePath)
   if (!(await git.isRepo())) {
     await git.init()
-    // 第一笔提交:把 .gitignore + .silent/(若存在)纳入版本控制
-    const initPaths: string[] = ['.gitignore']
-    if (await pathExists(join(workspacePath, '.silent'))) {
-      initPaths.push('.silent')
-    }
-    await git.addAll(initPaths)
+    // 第一笔提交:仅纳入 .gitignore;.silent/ 整个不进 git(silent agent 私域)
+    await git.addAll(['.gitignore'])
     try {
       await git.commit('initial: silent agent workspace', { allowEmpty: true })
     } catch (e) {
@@ -210,13 +206,4 @@ async function ensureSilentRuntimeIgnored(wsPath: string): Promise<void> {
   const append =
     (existing && !existing.endsWith('\n') ? '\n' : '') + `${SILENT_GITIGNORE_LINE}\n`
   await fs.writeFile(gitignorePath, existing + append, 'utf8')
-}
-
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p)
-    return true
-  } catch {
-    return false
-  }
 }
