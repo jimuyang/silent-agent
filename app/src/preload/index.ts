@@ -55,6 +55,8 @@ const api = {
       ipcRenderer.invoke(IPC.TAB_OPEN, { workspaceId, args }) as Promise<TabMeta>,
     duplicate: (tabId: string) =>
       ipcRenderer.invoke(IPC.TAB_DUPLICATE, tabId) as Promise<TabMeta>,
+    detach: (tabId: string) =>
+      ipcRenderer.invoke(IPC.TAB_DETACH, tabId) as Promise<number>,
     close: (tabId: string) =>
       ipcRenderer.invoke(IPC.TAB_CLOSE, tabId) as Promise<void>,
     focus: (tabId: string) =>
@@ -77,7 +79,7 @@ const api = {
       >,
     popupContextMenu: (state: { canClose: boolean }) =>
       ipcRenderer.invoke(IPC.TAB_POPUP_CONTEXT_MENU, state) as Promise<
-        'split-right' | 'split-down' | 'close' | null
+        'split-right' | 'split-down' | 'detach' | 'close' | null
       >,
     // 订阅 main 主动建 tab 的事件(目前唯一来源:browser-tab window.open 拦截 → sibling tab)。
     // 返回 unsubscribe 函数,组件卸载时调。

@@ -10,7 +10,7 @@ import type { TabManager, OpenTabArgs } from '../tabs/manager'
 
 export type TabTypeChoice = 'browser' | 'terminal' | 'file' | 'file-new' | null
 /** 右键 tab 后的语义动作 */
-export type TabContextChoice = 'split-right' | 'split-down' | 'close' | null
+export type TabContextChoice = 'split-right' | 'split-down' | 'detach' | 'close' | null
 
 // windowId → TabManager
 const managers = new Map<number, TabManager>()
@@ -50,6 +50,10 @@ export function registerTabIpc() {
 
   ipcMain.handle(IPC.TAB_DUPLICATE, async (event, tabId: string) => {
     return managerFor(event).duplicate(tabId)
+  })
+
+  ipcMain.handle(IPC.TAB_DETACH, async (event, tabId: string) => {
+    return managerFor(event).detach(tabId)
   })
 
   ipcMain.handle(IPC.TAB_FOCUS, async (event, tabId: string) => {
@@ -134,6 +138,13 @@ export function registerTabIpc() {
             label: '⊟   拆到下侧 pane',
             click: () => {
               chosen = 'split-down'
+            },
+          },
+          { type: 'separator' },
+          {
+            label: '🪟   在新窗口打开',
+            click: () => {
+              chosen = 'detach'
             },
           },
         ]

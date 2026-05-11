@@ -27,6 +27,8 @@ export const IPC = {
   TAB_OPEN: 'tab.open',
   /** 复制一个 tab(用同 url / cwd / path 起一个新 tab,silent-chat 不可复制) */
   TAB_DUPLICATE: 'tab.duplicate',
+  /** 把 tab 拆到独立 BrowserWindow:browser 类型迁移 WebContentsView 跨 window */
+  TAB_DETACH: 'tab.detach',
   TAB_CLOSE: 'tab.close',
   TAB_FOCUS: 'tab.focus',
   /** Per-tab bounds:多 BrowserView 并排各自定位 */

@@ -5,7 +5,8 @@
 // 两者需要保持一致:运行时变化(open/close/navigate)→ 立刻落盘。
 
 import { randomBytes } from 'node:crypto'
-import type { BrowserWindow } from 'electron'
+import { BrowserWindow } from 'electron'
+import { is } from '@electron-toolkit/utils'
 
 import { basename, join } from 'node:path'
 import { mkdir } from 'node:fs/promises'
@@ -236,6 +237,62 @@ export class TabManager {
   private async ensureTabDir(workspaceId: string, tabId: string): Promise<void> {
     const wsPath = await this.storage.resolveWorkspacePath(this.agentId(), workspaceId)
     await mkdir(P.workspaceTabDir(wsPath, tabId), { recursive: true })
+  }
+
+  /**
+   * 把 tab 拆到一个独立 BrowserWindow:
+   * - browser:WC 跨 contentView 迁(removeChildView + addChildView + setWindow)
+   * - 其他类型(silent-chat / terminal / file):runtime 在 main 进程跟 window 无关,
+   *   detached renderer 通过 tabId 走同套 IPC 即可拿到 pty 数据 / 文件内容 / chat 流
+   *
+   * 返回新 BrowserWindow 的 id(renderer 暂没用,但 IPC handler 透传以便日后用)。
+   * 关 detached window → 自动 manager.close(tabId)。
+   */
+  async detach(tabId: string): Promise<number> {
+    const found = this.findRuntime(tabId)
+    // file / silent-chat 没 runtime,也可以 detach(仅起新窗口渲染)
+    const workspaceId =
+      found?.workspaceId ?? (await this.findWorkspaceIdByTab(tabId))
+    if (!workspaceId) throw new Error(`detach: tab not found: ${tabId}`)
+
+    const detachedWin = new BrowserWindow({
+      width: 1200,
+      height: 800,
+      minWidth: 600,
+      minHeight: 400,
+      show: false,
+      autoHideMenuBar: true,
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 14, y: 12 },
+      backgroundColor: '#0f1013',
+      title: 'Silent Agent',
+      webPreferences: {
+        preload: join(__dirname, '../preload/index.mjs'),
+        sandbox: false,
+        contextIsolation: true,
+      },
+    })
+    detachedWin.on('ready-to-show', () => detachedWin.show())
+
+    // 关窗 = close tab(销毁 runtime + 从 tabs.json 删)
+    detachedWin.on('closed', () => {
+      this.close(tabId).catch((e) => console.warn('[detach] close after window close:', e))
+    })
+
+    // browser 才需要迁 WC;其他类型 native view 不存在
+    if (found && found.runtime instanceof BrowserTabRuntime) {
+      found.runtime.setWindow(detachedWin)
+    }
+
+    // 加载 renderer,带参数表明 detached 模式
+    const params = `?detached=1&tabId=${encodeURIComponent(tabId)}&workspaceId=${encodeURIComponent(workspaceId)}`
+    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+      detachedWin.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${params}`)
+    } else {
+      detachedWin.loadFile(join(__dirname, '../renderer/index.html'), { search: params.slice(1) })
+    }
+
+    return detachedWin.id
   }
 
   /**

@@ -17,6 +17,7 @@ import {
   firstPane,
   moveTabToPane,
   reconcileTree,
+  removeTabFromTree,
   rootShallowEqual,
   setPaneActive,
   setSplitRatio,
@@ -318,6 +319,12 @@ export default function App() {
       if (choice === 'split-right') void splitTab(paneId, 'row', tabId)
       else if (choice === 'split-down') void splitTab(paneId, 'column', tabId)
       else if (choice === 'close') onCloseTab(tabId)
+      else if (choice === 'detach') {
+        // tab 拆到新窗口:main 起 detached BrowserWindow,WC 跨 contentView 迁移;
+        // 本窗口的 layout 树同步把 tab 移除(避免主窗口 BrowserPane 把 WC 又拉回来)
+        void window.api.tab.detach(tabId).catch((e) => console.warn('[App] detach', e))
+        setRoot((prev) => (prev ? collapseEmptyPanes(removeTabFromTree(prev, tabId)) : prev))
+      }
     },
     [splitTab, onCloseTab],
   )

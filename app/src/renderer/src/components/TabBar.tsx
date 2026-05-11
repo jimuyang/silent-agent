@@ -3,7 +3,7 @@ import type { BrowserTabState, TabMeta } from '@shared/types'
 import { ipc } from '../lib/ipc'
 
 /** 上层(App)在 context menu 选择后要执行的语义动作 */
-export type ContextMenuChoice = 'split-right' | 'split-down' | 'close' | null
+export type ContextMenuChoice = 'split-right' | 'split-down' | 'detach' | 'close' | null
 
 /** drag-drop tab 跨 pane:从源 pane 取走 tab,放到目标 pane */
 export interface TabDropPayload {

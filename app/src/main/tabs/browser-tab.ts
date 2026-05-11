@@ -30,8 +30,11 @@ interface ClickPayload {
 export class BrowserTabRuntime {
   readonly view: WebContentsView
   meta: TabMeta
+  /** WC 当前挂的 BrowserWindow。detach 时 manager 会用 setWindow 改它。 */
+  public window: BrowserWindow
 
-  constructor(public readonly window: BrowserWindow, meta: TabMeta) {
+  constructor(window: BrowserWindow, meta: TabMeta) {
+    this.window = window
     this.meta = meta
     const state = (meta.state as BrowserTabState | null) ?? { url: 'about:blank' }
 
@@ -143,6 +146,20 @@ export class BrowserTabRuntime {
       width: Math.round(bounds.width),
       height: Math.round(bounds.height),
     })
+  }
+
+  /** detach 时把 WC 从一个 window 的 contentView 迁到另一个 window 的 contentView */
+  setWindow(newWindow: BrowserWindow) {
+    if (newWindow === this.window) return
+    try {
+      this.window.contentView.removeChildView(this.view)
+    } catch {
+      /* already removed / window 已 close */
+    }
+    this.window = newWindow
+    newWindow.contentView.addChildView(this.view)
+    // bounds 暂时给 0×0,等 detached renderer 的 BrowserPane mount setBoundsFor
+    this.view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
   }
 
   hide() {
