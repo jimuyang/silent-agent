@@ -89,14 +89,29 @@ export type LayoutNode =
   | { kind: 'split'; split: SplitMeta; children: [LayoutNode, LayoutNode] }
 
 /**
- * Workspace 主区布局(.silent/runtime/layout.json)
+ * 一个 BrowserWindow 的布局状态。Phase B 起,workspace 支持多 window —— 每个 window
+ * (主 window + 任意数量 detached window)都有自己的 root 树和(可选)bounds。
  *
- * `root` 缺失时,renderer 派生默认:
- *   - 有 silent-chat:row split, ratio=0.69, [非chat tabs] | [silent-chat]
- *   - 没有 silent-chat:单 pane,所有 tabs
+ * - isMain=true 的 window 只有一个,承载 LeftNav / WorkspaceSwitcher
+ * - id 跨重启稳定(detached window 的 id 持久化后用于恢复)
+ * - bounds 持久化窗口几何位置(Phase E 用,目前可选)
+ */
+export interface WindowLayout {
+  id: string
+  isMain: boolean
+  root: LayoutNode
+  bounds?: { x: number; y: number; width: number; height: number }
+}
+
+/**
+ * Workspace 主区布局(.silent/runtime/layout.json)。
+ *
+ * 多 window 模型:windows[0..n] 各自有 root 树。
+ *   - 旧格式 `{ root }` 自动迁移成 `{ windows: [{ id:'window-main', isMain:true, root }] }`
+ *   - windows 为空时,renderer 派生默认(根据 tabs 自动建主 window)
  */
 export interface WorkspaceLayout {
-  root?: LayoutNode
+  windows: WindowLayout[]
 }
 
 // ============ Workspace Event (统一事件流) ============

@@ -14,6 +14,7 @@ import { mkdir } from 'node:fs/promises'
 import type {
   BrowserTabState,
   FileTabState,
+  LayoutNode,
   TabMeta,
   TerminalTabState,
   WorkspaceLayout,
@@ -24,6 +25,7 @@ import {
   tabRelPath,
 } from '@shared/consts'
 import { IPC } from '@shared/ipc'
+import { collapseEmptyPanes, removeTabFromTree } from '@shared/layout-tree'
 import type { StorageAdapter } from '../storage/adapter'
 import * as P from '../storage/paths'
 import { captureBrowserSnapshot } from '../snapshots/browser'
@@ -31,7 +33,7 @@ import { vcsFor } from '../vcs/registry'
 import type { EmitInput } from '../vcs/interface'
 import { BrowserTabRuntime } from './browser-tab'
 import { TerminalTabRuntime } from './terminal-tab'
-import { readLayout } from '../ipc/layout'
+import { mutateLayoutAtomic, readLayout } from '../ipc/layout'
 
 export interface OpenBrowserArgs {
   type: 'browser'
@@ -255,6 +257,16 @@ export class TabManager {
       found?.workspaceId ?? (await this.findWorkspaceIdByTab(tabId))
     if (!workspaceId) throw new Error(`detach: tab not found: ${tabId}`)
 
+    // silent-chat / pinned 不允许 detach —— silent-chat 是 workspace 唯一,绑 main_chat
+    // 上下文;detached window 关掉 = 这个 chat 的呈现就丢了,UX 糟糕。块在源头。
+    if (tabId === SILENT_CHAT_TAB_ID) {
+      throw new Error('detach: silent-chat tab is pinned to its workspace and cannot be detached')
+    }
+    const meta = found?.runtime.meta
+    if (meta?.pinned) {
+      throw new Error(`detach: pinned tab ${tabId} cannot be detached`)
+    }
+
     const detachedWin = new BrowserWindow({
       width: 1200,
       height: 800,
@@ -274,18 +286,47 @@ export class TabManager {
     })
     detachedWin.on('ready-to-show', () => detachedWin.show())
 
-    // 关窗 = close tab(销毁 runtime + 从 tabs.json 删)
+    // 原子改 layout:**一次 read-modify-write** 同时(1) 从所有现有 window 的 root 摘掉
+    // tabId(2) 加新 detached window。避免跟 renderer 端 setWindowRoot 并发读写产生
+    // lost-update race(实测会让 main.root 里残留已 detach 的 tab)。
+    const windowId = `window-${randomBytes(4).toString('hex')}`
+    const wsPath = await this.storage.resolveWorkspacePath(this.agentId(), workspaceId)
+    const paneId = `pane-detached-${randomBytes(3).toString('hex')}`
+    const updated = await mutateLayoutAtomic(wsPath, (current) => {
+      // 从所有 window 摘掉 tabId(防御性 — 通常只主窗口里有)
+      for (const win of current.windows) {
+        win.root = collapseEmptyPanes(removeTabFromTree(win.root, tabId))
+      }
+      // 追加 detached window
+      current.windows.push({
+        id: windowId,
+        isMain: false,
+        root: {
+          kind: 'pane',
+          pane: { id: paneId, tabIds: [tabId], activeTabId: tabId },
+        },
+      })
+      return current
+    })
+
+    // 关窗 → 同样原子移除 detached + close tab(非 pinned 走删 tabs.json)
     detachedWin.on('closed', () => {
+      void mutateLayoutAtomic(wsPath, (current) => {
+        current.windows = current.windows.filter((w) => w.id !== windowId)
+        return current
+      }).catch((e) => console.warn('[detach] removeWindow on close:', e))
       this.close(tabId).catch((e) => console.warn('[detach] close after window close:', e))
     })
+    void updated  // suppress unused
 
     // browser 才需要迁 WC;其他类型 native view 不存在
     if (found && found.runtime instanceof BrowserTabRuntime) {
       found.runtime.setWindow(detachedWin)
     }
 
-    // 加载 renderer,带参数表明 detached 模式
-    const params = `?detached=1&tabId=${encodeURIComponent(tabId)}&workspaceId=${encodeURIComponent(workspaceId)}`
+    // 加载 renderer,Phase C 起 detached 窗口直接复用 App 组件,通过 windowId 找自己的
+    // WindowLayout.root 渲染(可 split / 多 tab)
+    const params = `?windowId=${encodeURIComponent(windowId)}&workspaceId=${encodeURIComponent(workspaceId)}`
     if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
       detachedWin.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${params}`)
     } else {
@@ -348,6 +389,11 @@ export class TabManager {
     const found = this.findRuntime(tabId)
     if (found) {
       const { workspaceId, runtime } = found
+      // pinned(silent-chat 等)的 runtime tab 也不能 destroy —— 防御 detach 后关窗等路径
+      if (runtime.meta.pinned) {
+        console.warn('[TabManager.close] refused: pinned tab', tabId)
+        return
+      }
       runtime.destroy()
       this.runtimes.get(workspaceId)?.delete(tabId)
       await this.persist(workspaceId)
@@ -360,13 +406,20 @@ export class TabManager {
       return
     }
     // 无 runtime(file / silent-chat):扫所有 workspace 的 tabs.json,找到并删
-    // silent-chat pinned 不会走到这里(close UI 不显示 × 按钮)
     const agentId = this.agentId()
     const workspaces = await this.storage.listWorkspaces(agentId)
     for (const w of workspaces) {
       const tabs = await this.storage.getTabs(agentId, w.id)
-      if (tabs.some((t) => t.id === tabId)) {
-        await this.storage.setTabs(agentId, w.id, tabs.filter((t) => t.id !== tabId))
+      const t = tabs.find((x) => x.id === tabId)
+      if (t) {
+        // pinned(尤其 silent-chat)绝不能从 tabs.json 删 —— 它是 workspace 唯一,
+        // 绑定 main_chat agent。误删后 ensureSilentChatTab 下次切 workspace 才会补,
+        // 中间会丢失 chat 上下文呈现。
+        if (t.pinned) {
+          console.warn('[TabManager.close] refused: pinned tab', tabId)
+          return
+        }
+        await this.storage.setTabs(agentId, w.id, tabs.filter((x) => x.id !== tabId))
         await this.emit(w.id, {
           source: 'tab',
           action: 'close',

@@ -77,7 +77,7 @@ const api = {
       ipcRenderer.invoke(IPC.TAB_POPUP_TYPE_MENU) as Promise<
         'browser' | 'terminal' | 'file' | 'file-new' | null
       >,
-    popupContextMenu: (state: { canClose: boolean }) =>
+    popupContextMenu: (state: { canClose: boolean; canDetach?: boolean }) =>
       ipcRenderer.invoke(IPC.TAB_POPUP_CONTEXT_MENU, state) as Promise<
         'split-right' | 'split-down' | 'detach' | 'close' | null
       >,
@@ -116,12 +116,15 @@ const api = {
       >,
   },
 
-  // 主区分栏布局(per-workspace,持久化到 .silent/runtime/layout.json)
+  // 多窗口布局(per-workspace,持久化到 .silent/runtime/layout.json)
   layout: {
     get: (workspaceId: string) =>
       ipcRenderer.invoke(IPC.LAYOUT_GET, workspaceId) as Promise<WorkspaceLayout>,
     set: (workspaceId: string, layout: Partial<WorkspaceLayout>) =>
       ipcRenderer.invoke(IPC.LAYOUT_SET, { workspaceId, layout }) as Promise<WorkspaceLayout>,
+    /** 细粒度:只改一个 window 的 root,避免多 window 并发写互覆盖 */
+    setWindowRoot: (workspaceId: string, windowId: string, root: import('../shared/types').LayoutNode) =>
+      ipcRenderer.invoke(IPC.LAYOUT_SET_WINDOW_ROOT, { workspaceId, windowId, root }) as Promise<WorkspaceLayout>,
   },
 
   // Review: spawn `claude -p` 在 workspace 跑 review,返回 markdown 建议 + session id

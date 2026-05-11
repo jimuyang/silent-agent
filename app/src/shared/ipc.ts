@@ -18,9 +18,11 @@ export const IPC = {
   WORKSPACE_DELETE: 'workspace.delete',
   WORKSPACE_LOAD_MESSAGES: 'workspace.loadMessages',
 
-  // layout(per-workspace 主区分栏比例 / 后续布局状态)
+  // layout(per-workspace 多窗口布局状态)
   LAYOUT_GET: 'layout.get',
   LAYOUT_SET: 'layout.set',
+  /** 只更新一个 window 的 root(细粒度,避免多 window 互相覆盖) */
+  LAYOUT_SET_WINDOW_ROOT: 'layout.setWindowRoot',
 
   // tab
   TAB_LIST: 'tab.list',

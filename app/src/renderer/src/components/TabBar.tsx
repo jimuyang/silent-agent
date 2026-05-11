@@ -103,9 +103,11 @@ export default function TabBar({
 
   async function handleTabContextMenu(e: React.MouseEvent, t: TabMeta) {
     e.preventDefault()
+    // silent-chat / pinned 不可关、不可 detach(detach 后关窗会丢 chat 上下文呈现)
+    const canCloseOrDetach = !t.pinned && t.type !== 'silent-chat'
     const choice = await ipc.tab.popupContextMenu({
-      // silent-chat / pinned 不可关
-      canClose: !t.pinned && t.type !== 'silent-chat',
+      canClose: canCloseOrDetach,
+      canDetach: canCloseOrDetach,
     })
     if (choice && choice !== null) {
       onContextMenuAction(choice, t.id)
@@ -235,6 +237,18 @@ export default function TabBar({
                 'application/x-silent-tab',
                 JSON.stringify({ tabId: t.id, fromPaneId: paneId }),
               )
+            }}
+            onDragEnd={(e) => {
+              // 没成功 drop 进任何 zone 且鼠标落在窗口外 → detach 到新 BrowserWindow。
+              // dropEffect 'none' = 既没被 TabBar / pane body 接住,也没被取消(Esc 也是 'none',
+              // 但 Esc 时鼠标在窗口内 → 不触发)
+              if (e.dataTransfer.dropEffect !== 'none') return
+              // silent-chat / pinned 不允许 detach(同右键菜单一致)
+              if (t.pinned || t.type === 'silent-chat') return
+              const { clientX: x, clientY: y } = e
+              const outOfWindow =
+                x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight
+              if (outOfWindow) onContextMenuAction('detach', t.id)
             }}
           >
             <span className="tab-name">

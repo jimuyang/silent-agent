@@ -121,7 +121,7 @@ export function registerTabIpc() {
   // 拆右 / 拆下永远可用(把这个 tab 拆到新 pane)。
   ipcMain.handle(
     IPC.TAB_POPUP_CONTEXT_MENU,
-    async (event, payload: { canClose: boolean }) => {
+    async (event, payload: { canClose: boolean; canDetach?: boolean }) => {
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) return null
 
@@ -140,14 +140,17 @@ export function registerTabIpc() {
               chosen = 'split-down'
             },
           },
-          { type: 'separator' },
-          {
+        ]
+        // silent-chat / pinned tab 不显示"在新窗口打开"
+        if (payload.canDetach !== false) {
+          items.push({ type: 'separator' })
+          items.push({
             label: '🪟   在新窗口打开',
             click: () => {
               chosen = 'detach'
             },
-          },
-        ]
+          })
+        }
         if (payload.canClose) {
           items.push({ type: 'separator' })
           items.push({

@@ -1,13 +1,17 @@
 // [main · 桥接层 · import 'electron']
-// Per-workspace 主区布局(.silent/runtime/layout.json)。
-// 数据小(只一棵 LayoutNode 树),直接 fs read/write JSON。
+// Per-workspace 多窗口布局(.silent/runtime/layout.json)。
+// 数据小,直接 fs read/write JSON。
+//
+// 数据模型:WorkspaceLayout = { windows: WindowLayout[] }。
+// 旧格式 `{ root: LayoutNode }` 自动迁移成 `{ windows:[{id:'window-main',isMain:true,root}] }`。
 
 import { ipcMain } from 'electron'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 import { IPC } from '@shared/ipc'
-import type { LayoutNode, WorkspaceLayout } from '@shared/types'
+import { MAIN_WINDOW_ID } from '@shared/consts'
+import type { LayoutNode, WindowLayout, WorkspaceLayout } from '@shared/types'
 import type { StorageAdapter } from '../storage/adapter'
 import { workspaceLayoutFile } from '../storage/paths'
 import { agentIdFromEvent } from './context'
@@ -22,7 +26,7 @@ function clampRatio(r: unknown): number {
 
 /** 递归校验 + 修剪 LayoutNode。结构非法的子树丢弃,合理性由 renderer 后续 reconcile 兜底。 */
 function sanitizeNode(raw: unknown, depth = 0): LayoutNode | null {
-  if (depth > 16) return null // 防御深度,避免恶意 / 损坏数据
+  if (depth > 16) return null
   if (!raw || typeof raw !== 'object') return null
   const obj = raw as { kind?: unknown }
 
@@ -61,15 +65,66 @@ function sanitizeNode(raw: unknown, depth = 0): LayoutNode | null {
   return null
 }
 
+function sanitizeBounds(raw: unknown): WindowLayout['bounds'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as { x?: unknown; y?: unknown; width?: unknown; height?: unknown }
+  if (
+    typeof r.x !== 'number' ||
+    typeof r.y !== 'number' ||
+    typeof r.width !== 'number' ||
+    typeof r.height !== 'number'
+  )
+    return undefined
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+}
+
+function sanitizeWindow(raw: unknown): WindowLayout | null {
+  if (!raw || typeof raw !== 'object') return null
+  const w = raw as { id?: unknown; isMain?: unknown; root?: unknown; bounds?: unknown }
+  if (typeof w.id !== 'string') return null
+  const root = sanitizeNode(w.root)
+  if (!root) return null
+  return {
+    id: w.id,
+    isMain: Boolean(w.isMain),
+    root,
+    bounds: sanitizeBounds(w.bounds),
+  }
+}
+
+function sanitizeWindows(raw: unknown): WindowLayout[] {
+  if (!Array.isArray(raw)) return []
+  const out: WindowLayout[] = []
+  for (const w of raw) {
+    const s = sanitizeWindow(w)
+    if (s) out.push(s)
+  }
+  // 保证最多一个 isMain
+  let mainSeen = false
+  for (const w of out) {
+    if (w.isMain) {
+      if (mainSeen) w.isMain = false
+      else mainSeen = true
+    }
+  }
+  return out
+}
+
 export async function readLayout(wsPath: string): Promise<WorkspaceLayout> {
   try {
     const raw = await readFile(workspaceLayoutFile(wsPath), 'utf8')
-    const parsed = JSON.parse(raw) as { root?: unknown }
-    const root = sanitizeNode(parsed.root)
-    return root ? { root } : {}
+    const parsed = JSON.parse(raw) as { root?: unknown; windows?: unknown }
+
+    // 迁移:旧格式 `{ root: LayoutNode }` → `{ windows: [main 唯一窗口] }`
+    if (parsed.root !== undefined && parsed.windows === undefined) {
+      const root = sanitizeNode(parsed.root)
+      return { windows: root ? [{ id: MAIN_WINDOW_ID, isMain: true, root }] : [] }
+    }
+
+    return { windows: sanitizeWindows(parsed.windows) }
   } catch {
-    // 不存在 / 损坏 → 空 layout(renderer 派生默认)
-    return {}
+    // 不存在 / 损坏 → 空 windows(renderer 派生默认主 window)
+    return { windows: [] }
   }
 }
 
@@ -86,6 +141,7 @@ export function registerLayoutIpc(storage: StorageAdapter) {
     return readLayout(wsPath)
   })
 
+  // 整盘覆盖(供 main 内部 / 极少用)。renderer 一般走 setWindowRoot 细粒度。
   ipcMain.handle(
     IPC.LAYOUT_SET,
     async (
@@ -95,15 +151,90 @@ export function registerLayoutIpc(storage: StorageAdapter) {
       const agentId = agentIdFromEvent(event)
       const wsPath = await storage.resolveWorkspacePath(agentId, payload.workspaceId)
       const current = await readLayout(wsPath)
-      const merged: WorkspaceLayout = {}
-      if ('root' in payload.layout) {
-        const root = sanitizeNode(payload.layout.root)
-        if (root) merged.root = root
-      } else if (current.root) {
-        merged.root = current.root
+      const merged: WorkspaceLayout = {
+        windows:
+          payload.layout.windows !== undefined
+            ? sanitizeWindows(payload.layout.windows)
+            : current.windows,
       }
       await writeLayout(wsPath, merged)
       return merged
     },
   )
+
+  // 细粒度:只改一个 window 的 root。renderer 标配。走 mutateLayoutAtomic 进串行链,
+  // 跟 main 端 detach / close 等修改互斥,防 read-modify-write 丢更新。
+  ipcMain.handle(
+    IPC.LAYOUT_SET_WINDOW_ROOT,
+    async (
+      event,
+      payload: { workspaceId: string; windowId: string; root: LayoutNode },
+    ) => {
+      const agentId = agentIdFromEvent(event)
+      const wsPath = await storage.resolveWorkspacePath(agentId, payload.workspaceId)
+      const sanitized = sanitizeNode(payload.root)
+      if (!sanitized) return readLayout(wsPath)
+      return mutateLayoutAtomic(wsPath, (current) => {
+        const idx = current.windows.findIndex((w) => w.id === payload.windowId)
+        if (idx >= 0) {
+          current.windows[idx] = { ...current.windows[idx]!, root: sanitized }
+        } else {
+          current.windows.push({
+            id: payload.windowId,
+            isMain: payload.windowId === MAIN_WINDOW_ID,
+            root: sanitized,
+          })
+        }
+        return current
+      })
+    },
+  )
+}
+
+/** main-internal:detach 时往 layout 加一个 detached window 条目 */
+export async function addWindowToLayout(
+  wsPath: string,
+  windowLayout: WindowLayout,
+): Promise<void> {
+  const current = await readLayout(wsPath)
+  // 同 id 已存在则覆盖
+  const idx = current.windows.findIndex((w) => w.id === windowLayout.id)
+  if (idx >= 0) current.windows[idx] = windowLayout
+  else current.windows.push(windowLayout)
+  await writeLayout(wsPath, current)
+}
+
+/** main-internal:关 detached window 时移除条目 */
+export async function removeWindowFromLayout(
+  wsPath: string,
+  windowId: string,
+): Promise<void> {
+  const current = await readLayout(wsPath)
+  const next = current.windows.filter((w) => w.id !== windowId)
+  if (next.length === current.windows.length) return
+  await writeLayout(wsPath, { windows: next })
+}
+
+/**
+ * main-internal:原子的 read-modify-write。用一把进程内 promise lock 串行化对 layout.json
+ * 的写,避免 detach / renderer setWindowRoot / window close 等多路径并发交错丢更新。
+ *
+ * 注:跨进程(renderer ↔ main 同写)仍可能 race —— 但 renderer 只走 setWindowRoot
+ * (那个 handler 本身已 await readLayout + writeLayout 同步;实际是单个 ipcMain.handle
+ * 一帧内完成),且 main 端 detach 路径已通过本函数序列化。整体 race 窗口大幅收窄。
+ */
+let __layoutWriteChain: Promise<unknown> = Promise.resolve()
+export function mutateLayoutAtomic(
+  wsPath: string,
+  mutate: (current: WorkspaceLayout) => WorkspaceLayout,
+): Promise<WorkspaceLayout> {
+  const next = __layoutWriteChain.then(async () => {
+    const current = await readLayout(wsPath)
+    const updated = mutate(current)
+    await writeLayout(wsPath, updated)
+    return updated
+  })
+  // 错误不阻塞后续链(catch 后再 resolve)
+  __layoutWriteChain = next.catch(() => undefined)
+  return next as Promise<WorkspaceLayout>
 }

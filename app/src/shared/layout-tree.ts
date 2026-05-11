@@ -1,9 +1,9 @@
-// [renderer]
-// LayoutNode 树的纯函数操作。所有 mutator 都返回新树(immutable),不改入参。
-// React state 只 set 新引用,不会有 stale 渲染问题。
+// [shared · 纯函数 · 无 React / Electron 依赖]
+// LayoutNode 树的不可变 mutator + reconcile 工具。renderer 和 main 都能用 —— main 在
+// manager.detach 里需要做原子的 layout 修改(避开 renderer-main 并发 read-modify-write race)。
 
-import type { LayoutNode, PaneMeta, SplitMeta, TabMeta } from '@shared/types'
-import { SILENT_CHAT_TAB_ID } from '@shared/consts'
+import type { LayoutNode, PaneMeta, SplitMeta, TabMeta } from './types'
+import { SILENT_CHAT_TAB_ID } from './consts'
 
 // ============ id 生成 ============
 
@@ -408,29 +408,16 @@ export function reconcileTree(
   }
   let cleaned = cleanNode(root)
 
-  // 2) 收集已分配 tab id
-  const assigned = new Set<string>()
-  for (const p of listPanes(cleaned)) p.tabIds.forEach((id) => assigned.add(id))
-
-  // 3) 新 tab → 落入 focused pane(找不到放第一个)
-  const newTabs = tabs.filter((t) => !assigned.has(t.id))
-  if (newTabs.length > 0) {
-    const target =
-      (focusedPaneId && findPaneById(cleaned, focusedPaneId)) ?? firstPane(cleaned)
-    if (target) {
-      cleaned = mapPane(cleaned, target.id, (p) => ({
-        ...p,
-        tabIds: [...p.tabIds, ...newTabs.map((t) => t.id)],
-        activeTabId: p.activeTabId ?? newTabs[0]?.id ?? null,
-      }))
-    }
-  }
-
-  // 自动折叠空 pane(用户偏好:"空 pane 自动折叠")。
+  // 注:不再"自动把 tabs 里有但树里没的 tab 塞到 focused pane"。
   //
-  // 副作用:对 1-tab 的 pane 做 split-right/down 时,源被掏空 → 立即折叠 → 视觉零变化。
-  // 这是符合 IDE(VSCode/Cursor)预期的:他们对单文件 split 走"复制视图",我们的 tab
-  // 不支持复制视图,所以 1-tab split 自然降级成 no-op。要分栏的时候,先开够 ≥2 tabs。
+  // 多窗口模型(Phase B)起,tab 的归属由各 window 自己的 root 树决定 —— "tabs 里有但
+  // 这个窗口的树里没" 正常情况就是 "属于别的 window"(detached),不该被本窗口的 reconcile
+  // 拉过来。tab 创建路径(openX / duplicate / window.open 拦截)都是显式调 appendTabToPane /
+  // moveTabToPane,reconcile 不再承担"补漏"职责。
+  //
+  // 折叠空 pane(用户偏好):
+  //   - 关掉某 pane 最后一个 tab → pane 自动折叠
+  //   - 1-tab pane 做 split-right/down → 源被掏空 → 折叠 → 视觉零变化(IDE 行为)
   cleaned = collapseEmptyPanes(cleaned)
   return cleaned
 }

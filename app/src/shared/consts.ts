@@ -58,6 +58,9 @@ export const SILENT_CHAT_TAB_ID = 'silent-chat'
 /** Pane 默认 id(长期稳定,持久化到 layout.json 不会变) */
 export const PANE_ID_LEFT = 'pane-0'
 export const PANE_ID_RIGHT = 'pane-1'
+
+/** 主 BrowserWindow 的 windowId,稳定不变。detached window 用 `window-<rand>` */
+export const MAIN_WINDOW_ID = 'window-main'
 export const SILENT_CHAT_TAB_PATH = `${SILENT_DIR}/${RUNTIME_DIR}/${FILES.MAIN_CHAT}`
 
 /** browser/terminal tab 产物子目录(.silent/runtime/tabs/<tid>/,装 snapshots + buffer.log) */

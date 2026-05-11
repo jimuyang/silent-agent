@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { LayoutNode } from '@shared/types'
+import type { LayoutNode, WorkspaceLayout } from '@shared/types'
+import { MAIN_WINDOW_ID } from '@shared/consts'
 import LeftNav from './components/LeftNav'
 import LayoutTree from './components/LayoutTree'
 import FileTreePanel from './components/FileTreePanel'
@@ -23,17 +24,39 @@ import {
   setSplitRatio,
   splitPaneInsertTab,
   splitPaneWithTab,
-} from './lib/layout-tree'
+} from '@shared/layout-tree'
 import type { DropZone } from './components/Pane'
 
-export default function App() {
+/**
+ * App 同时承担主窗口和 detached 窗口两种身份。
+ *
+ *  - 主窗口:windowId='window-main',isMain=true,workspaceId 由用户选(LeftNav 切),
+ *    渲染 LeftNav / FileTreePanel / WorkspaceSwitcher
+ *  - detached:windowId='window-<rand>',isMain=false,workspaceId 启动时由 URL 给死,
+ *    不显示 LeftNav,只渲染自己 WindowLayout.root 的 LayoutTree(可 split / 多 tab)
+ */
+export interface AppProps {
+  windowId?: string
+  isMain?: boolean
+  /** detached 模式启动 URL 锁死 workspaceId,主窗口走 useWorkspaces 自动选 */
+  fixedWorkspaceId?: string
+}
+
+export default function App({
+  windowId = MAIN_WINDOW_ID,
+  isMain = true,
+  fixedWorkspaceId,
+}: AppProps = {}) {
   const { agent } = useAgent()
   const { workspaces, create } = useWorkspaces()
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
+    fixedWorkspaceId ?? null,
+  )
   const [fileTreeOpen, setFileTreeOpen] = useState(false)
 
-  // 列表首次加载完 / 当前选中被删 时, 回落到第一条
+  // 列表首次加载完 / 当前选中被删 时, 回落到第一条(仅主窗口;detached 锁死 fixedWorkspaceId)
   useEffect(() => {
+    if (!isMain) return
     if (workspaces.length === 0) {
       setActiveWorkspaceId(null)
       return
@@ -41,7 +64,7 @@ export default function App() {
     if (!activeWorkspaceId || !workspaces.find((w) => w.id === activeWorkspaceId)) {
       setActiveWorkspaceId(workspaces[0]!.id)
     }
-  }, [workspaces, activeWorkspaceId])
+  }, [workspaces, activeWorkspaceId, isMain])
 
   const activeWorkspace = useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId) ?? null,
@@ -82,10 +105,16 @@ export default function App() {
   // 1) workspace 切换:tabs 跟 layout 通过 useTabs 一次 IPC 原子拿回。
   //    onLayoutLoaded 在 setTabs 同一 .then 内被调,React 18 自动批处理 → setTabs 和 setRoot
   //    在同一渲染提交内完成 → 杜绝 race(以前两条独立 IPC,layout 先回时 reconcile 用空 tabs 把 saved tree 误清空)。
-  const onLayoutLoaded = useCallback((l: { root?: LayoutNode | null }) => {
-    setRoot(l.root ?? null)
-    layoutLoadedRef.current = true
-  }, [])
+  //
+  // 多窗口模型(Phase B/C):layout.windows[] 数组,按 windowId 取自己那条
+  const onLayoutLoaded = useCallback(
+    (layout: WorkspaceLayout) => {
+      const myWin = layout.windows.find((w) => w.id === windowId) ?? null
+      setRoot(myWin?.root ?? null)
+      layoutLoadedRef.current = true
+    },
+    [windowId],
+  )
 
   const {
     tabs,
@@ -113,13 +142,13 @@ export default function App() {
     })
   }, [tabs, focusedPaneId, activeWorkspaceId])
 
-  // 3) root 变化 → 落盘
+  // 3) root 变化 → 持久化到 windows[windowId].root(细粒度,多窗口并发安全)
   useEffect(() => {
     if (!activeWorkspaceId || !layoutLoadedRef.current || !root) return
     ipc.layout
-      .set(activeWorkspaceId, { root })
-      .catch((e) => console.warn('[App] layout.set root failed:', e))
-  }, [root, activeWorkspaceId])
+      .setWindowRoot(activeWorkspaceId, windowId, root)
+      .catch((e) => console.warn('[App] layout.setWindowRoot failed:', e))
+  }, [root, activeWorkspaceId, windowId])
 
   // 4) focusedPaneId 失效 → 回落首 pane
   useEffect(() => {
@@ -409,17 +438,19 @@ export default function App() {
       </div>
 
       <div className="main">
-        <LeftNav
-          agent={agent}
-          workspaces={workspaces}
-          activeWorkspaceId={activeWorkspaceId}
-          narrow={fileTreeOpen}
-          onSelectWorkspace={setActiveWorkspaceId}
-          onCreateWorkspace={handleCreateWorkspace}
-          onToggleFileTree={() => setFileTreeOpen((x) => !x)}
-        />
+        {isMain && (
+          <LeftNav
+            agent={agent}
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            narrow={fileTreeOpen}
+            onSelectWorkspace={setActiveWorkspaceId}
+            onCreateWorkspace={handleCreateWorkspace}
+            onToggleFileTree={() => setFileTreeOpen((x) => !x)}
+          />
+        )}
 
-        {fileTreeOpen && activeWorkspace?.path && (
+        {isMain && fileTreeOpen && activeWorkspace?.path && (
           <FileTreePanel
             rootPath={activeWorkspace.path}
             activeFilePath={activeFilePath}
