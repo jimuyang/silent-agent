@@ -46,6 +46,14 @@ const api = {
       ipcRenderer.invoke(IPC.WORKSPACE_DELETE, id) as Promise<void>,
     loadMessages: (id: string) =>
       ipcRenderer.invoke(IPC.WORKSPACE_LOAD_MESSAGES, id) as Promise<ChatMessage[]>,
+    /** 在新 BrowserWindow 打开 workspace —— fresh 空 pane(用户右键 → "在新窗口打开") */
+    openInNewWindow: (workspaceId: string) =>
+      ipcRenderer.invoke(IPC.WORKSPACE_OPEN_IN_NEW_WINDOW, workspaceId) as Promise<number>,
+    /** 右键 workspace item 弹原生菜单。resolve 用户选项;cancel/click-away 时为 null */
+    popupContextMenu: () =>
+      ipcRenderer.invoke(IPC.WORKSPACE_POPUP_CONTEXT_MENU) as Promise<
+        'open-in-new-window' | null
+      >,
   },
 
   tab: {

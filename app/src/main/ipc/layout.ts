@@ -191,6 +191,59 @@ export function registerLayoutIpc(storage: StorageAdapter) {
   )
 }
 
+/**
+ * 启动 sweep:layout.json 里 `isMain:false` 的 detached window 在 app 重启那刻一定是 phantom
+ * (没有"启动恢复 detached BrowserWindow"逻辑)。把它们的 tabId 全部捞回 main window 的
+ * first pane,再删掉 phantom 条目。没 main window 就建一个空 pane,捞回来填进去。
+ * 幂等:没 phantom 时不写盘。
+ */
+export async function sweepPhantomWindows(wsPath: string): Promise<void> {
+  const current = await readLayout(wsPath)
+  const phantoms = current.windows.filter((w) => !w.isMain)
+  if (phantoms.length === 0) return
+
+  // 收集 phantom 树里所有 tabId(保持顺序,后追加到 main pane 末尾)
+  const rescued: string[] = []
+  const walk = (n: LayoutNode) => {
+    if (n.kind === 'pane') {
+      for (const id of n.pane.tabIds) if (!rescued.includes(id)) rescued.push(id)
+    } else {
+      walk(n.children[0])
+      walk(n.children[1])
+    }
+  }
+  for (const w of phantoms) walk(w.root)
+
+  // 找 / 建 main
+  let main = current.windows.find((w) => w.isMain)
+  if (!main) {
+    main = {
+      id: MAIN_WINDOW_ID,
+      isMain: true,
+      root: {
+        kind: 'pane',
+        pane: { id: `pane-${Math.random().toString(36).slice(2, 8)}`, tabIds: [], activeTabId: null },
+      },
+    }
+    current.windows.unshift(main)
+  }
+  // 主 pane = main window 树最左/最上叶子。直接 mutate(listPanes-style 走法)
+  let leaf: LayoutNode = main.root
+  while (leaf.kind === 'split') leaf = leaf.children[0]
+  if (leaf.kind === 'pane') {
+    for (const id of rescued) {
+      if (!leaf.pane.tabIds.includes(id)) leaf.pane.tabIds.push(id)
+    }
+    if (!leaf.pane.activeTabId && leaf.pane.tabIds.length > 0) {
+      leaf.pane.activeTabId = leaf.pane.tabIds[0] ?? null
+    }
+  }
+
+  // 删 phantom 条目,只保留 main
+  current.windows = current.windows.filter((w) => w.isMain)
+  await writeLayout(wsPath, current)
+}
+
 /** main-internal:detach 时往 layout 加一个 detached window 条目 */
 export async function addWindowToLayout(
   wsPath: string,

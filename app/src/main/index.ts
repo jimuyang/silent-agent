@@ -15,6 +15,7 @@ import { LocalFsAdapter } from './storage/local-fs'
 import { AgentRegistry } from './agent/registry'
 import { WorkspaceService } from './agent/workspace'
 import { registerAllIpc } from './ipc'
+import { sweepPhantomWindows } from './ipc/layout'
 import { TabManager } from './tabs/manager'
 import { registerTabManager, unregisterTabManager } from './ipc/tab'
 import { ChatManager } from './chat/manager'
@@ -83,6 +84,15 @@ app.whenReady().then(async () => {
   // 启动 guard:保证 default agent + 至少一条 workspace 存在
   const defaultAgent = await registry.ensureDefault()
   await workspaces.ensureHasWorkspace(defaultAgent.id)
+
+  // 启动 sweep:把 layout.json 里残留的 detached window(phantom — 重启那刻一定没真窗口)
+  // 里的 tab 全部捞回主窗口主 pane,删 phantom 条目。每个 workspace 各扫一遍。
+  for (const w of await storage.listWorkspaces(defaultAgent.id)) {
+    const wsPath = await storage.resolveWorkspacePath(defaultAgent.id, w.id)
+    await sweepPhantomWindows(wsPath).catch((e) =>
+      console.warn('[startup] sweepPhantomWindows', w.id, e),
+    )
+  }
 
   // ----- IPC 注册(唯一 import electron 的业务入口) -----
   registerAllIpc({ registry, workspaces, storage })

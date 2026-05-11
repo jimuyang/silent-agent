@@ -20,12 +20,13 @@ import type {
   WorkspaceLayout,
 } from '@shared/types'
 import {
+  MAIN_WINDOW_ID,
   SILENT_CHAT_TAB_ID,
   SILENT_CHAT_TAB_PATH,
   tabRelPath,
 } from '@shared/consts'
 import { IPC } from '@shared/ipc'
-import { collapseEmptyPanes, removeTabFromTree } from '@shared/layout-tree'
+import { collapseEmptyPanes, listPanes, removeTabFromTree } from '@shared/layout-tree'
 import type { StorageAdapter } from '../storage/adapter'
 import * as P from '../storage/paths'
 import { captureBrowserSnapshot } from '../snapshots/browser'
@@ -326,14 +327,74 @@ export class TabManager {
 
     // 加载 renderer,Phase C 起 detached 窗口直接复用 App 组件,通过 windowId 找自己的
     // WindowLayout.root 渲染(可 split / 多 tab)
+    this.loadDetachedRenderer(detachedWin, windowId, workspaceId)
+    return detachedWin.id
+  }
+
+  /**
+   * 在 workspace 上打开一个全新的独立窗口 — 不动现有 tab,空 pane 起手。
+   * 用例:用户右键 workspace → "在新窗口打开"。
+   *
+   * 跟 detach 共用 createDetachedBrowserWindow / mutateLayoutAtomic 路径,只是 root
+   * 初始化为单空 pane(用户自己开 tab 填进去)。
+   */
+  async openWorkspaceInNewWindow(workspaceId: string): Promise<number> {
+    const win = this.createDetachedBrowserWindow()
+    const windowId = `window-${randomBytes(4).toString('hex')}`
+    const paneId = `pane-detached-${randomBytes(3).toString('hex')}`
+    const wsPath = await this.storage.resolveWorkspacePath(this.agentId(), workspaceId)
+    await mutateLayoutAtomic(wsPath, (current) => {
+      current.windows.push({
+        id: windowId,
+        isMain: false,
+        root: {
+          kind: 'pane',
+          pane: { id: paneId, tabIds: [], activeTabId: null },
+        },
+      })
+      return current
+    })
+    win.on('closed', () => {
+      void mutateLayoutAtomic(wsPath, (current) => {
+        current.windows = current.windows.filter((w) => w.id !== windowId)
+        return current
+      }).catch((e) => console.warn('[openInNewWindow] removeWindow on close:', e))
+    })
+    this.loadDetachedRenderer(win, windowId, workspaceId)
+    return win.id
+  }
+
+  /** detach / openWorkspaceInNewWindow 共用 — 用一致的 webPreferences 起 detached 窗口 */
+  private createDetachedBrowserWindow(): BrowserWindow {
+    const win = new BrowserWindow({
+      width: 1200,
+      height: 800,
+      minWidth: 600,
+      minHeight: 400,
+      show: false,
+      autoHideMenuBar: true,
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 14, y: 12 },
+      backgroundColor: '#0f1013',
+      title: 'Silent Agent',
+      webPreferences: {
+        preload: join(__dirname, '../preload/index.mjs'),
+        sandbox: false,
+        contextIsolation: true,
+      },
+    })
+    win.on('ready-to-show', () => win.show())
+    return win
+  }
+
+  /** 给 detached BrowserWindow 加载 renderer 入口,URL 带 windowId + workspaceId */
+  private loadDetachedRenderer(win: BrowserWindow, windowId: string, workspaceId: string) {
     const params = `?windowId=${encodeURIComponent(windowId)}&workspaceId=${encodeURIComponent(workspaceId)}`
     if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-      detachedWin.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${params}`)
+      win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${params}`)
     } else {
-      detachedWin.loadFile(join(__dirname, '../renderer/index.html'), { search: params.slice(1) })
+      win.loadFile(join(__dirname, '../renderer/index.html'), { search: params.slice(1) })
     }
-
-    return detachedWin.id
   }
 
   /**
@@ -512,8 +573,67 @@ export class TabManager {
     }
     const tabs = await this.storage.getTabs(this.agentId(), workspaceId)
     const wsPath = await this.storage.resolveWorkspacePath(this.agentId(), workspaceId)
+    // self-heal:pinned tab(silent-chat 等)如果 tabs.json 在但 layout 里没,补到 main
+    // window 的 first pane。reconcileTree 不再"补漏"非 pinned tab,但 pinned tab 是
+    // workspace 唯一、不可 detach,只可能属于主窗口,所以补回安全。
+    await this.healPinnedTabsInLayout(wsPath, tabs)
     const layout = await readLayout(wsPath)
     return { tabs, layout }
+  }
+
+  /**
+   * 确保 tabs.json 里所有 pinned tab(目前主要是 silent-chat)都挂在 main window 某个 pane 上。
+   * 若 main window 不存在,创建一个;若主 window 的 root 是空 pane,把 pinned tabIds 塞进去;
+   * 若已存在某 pane 含此 tab,跳过。原子改 layout.json。
+   */
+  private async healPinnedTabsInLayout(
+    wsPath: string,
+    tabs: TabMeta[],
+  ): Promise<void> {
+    const pinned = tabs.filter((t) => t.pinned)
+    if (pinned.length === 0) return
+
+    await mutateLayoutAtomic(wsPath, (current) => {
+      // 收集所有 window 树里已出现的 tabId
+      const present = new Set<string>()
+      for (const w of current.windows) {
+        for (const p of listPanes(w.root)) {
+          for (const id of p.tabIds) present.add(id)
+        }
+      }
+      const missing = pinned.filter((t) => !present.has(t.id))
+      if (missing.length === 0) return current
+
+      // 找 / 建 main window
+      let mainIdx = current.windows.findIndex((w) => w.isMain)
+      if (mainIdx < 0) {
+        current.windows.push({
+          id: MAIN_WINDOW_ID,
+          isMain: true,
+          root: {
+            kind: 'pane',
+            pane: {
+              id: `pane-${randomBytes(3).toString('hex')}`,
+              tabIds: [],
+              activeTabId: null,
+            },
+          },
+        })
+        mainIdx = current.windows.length - 1
+      }
+      const mainWin = current.windows[mainIdx]!
+      // 拿 main window 的 first pane(树最左叶子);若已是空 pane / 含其他 tab 都直接追加
+      const firstLeaf = listPanes(mainWin.root)[0]
+      if (firstLeaf) {
+        for (const t of missing) {
+          if (!firstLeaf.tabIds.includes(t.id)) firstLeaf.tabIds.push(t.id)
+        }
+        if (!firstLeaf.activeTabId && firstLeaf.tabIds.length > 0) {
+          firstLeaf.activeTabId = firstLeaf.tabIds[0] ?? null
+        }
+      }
+      return current
+    })
   }
 
   /** 幂等:确保某 workspace 的 tabs.json 里有一个 silent-chat tab。 */

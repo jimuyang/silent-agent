@@ -24,7 +24,8 @@ export function unregisterTabManager(windowId: number) {
   managers.delete(windowId)
 }
 
-function managerFor(_event: Electron.IpcMainInvokeEvent): TabManager {
+// 导出给其他 IPC handler 复用(workspace.openInNewWindow 也要拿 TabManager 建窗)
+export function managerFor(_event: Electron.IpcMainInvokeEvent): TabManager {
   // 在多 window 时按 event.sender.getOwnerBrowserWindow().id 反查
   // MVP 单 window, 任意拿第一个就好
   if (managers.size === 0) throw new Error('no tab manager registered')

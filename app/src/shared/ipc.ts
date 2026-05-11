@@ -17,6 +17,10 @@ export const IPC = {
   WORKSPACE_RENAME: 'workspace.rename',
   WORKSPACE_DELETE: 'workspace.delete',
   WORKSPACE_LOAD_MESSAGES: 'workspace.loadMessages',
+  /** 把 workspace 在新 BrowserWindow 打开(fresh 空 pane,不影响原窗口) */
+  WORKSPACE_OPEN_IN_NEW_WINDOW: 'workspace.openInNewWindow',
+  /** 右键 workspace item 弹原生菜单 */
+  WORKSPACE_POPUP_CONTEXT_MENU: 'workspace.popupContextMenu',
 
   // layout(per-workspace 多窗口布局状态)
   LAYOUT_GET: 'layout.get',

@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AgentMeta, WorkspaceMeta } from '@shared/types'
+import { ipc } from '../lib/ipc'
+
+// 关闭"右键 workspace → 在新窗口打开"。silent-chat 仍绑主窗口,新窗口里没法用主 chat,
+// MVP 阶段先关掉避免误用;后面真正需要 multi-window-per-ws 时改 true 即可。
+const ENABLE_WORKSPACE_OPEN_IN_NEW_WINDOW = false
 
 interface LeftNavProps {
   agent: AgentMeta | null
@@ -168,10 +173,21 @@ function WorkspaceItem({
   onSelect: () => void
   onToggleFileTree?: (workspaceId: string) => void
 }) {
+  async function handleContextMenu(e: React.MouseEvent) {
+    e.preventDefault()
+    const choice = await ipc.workspace.popupContextMenu()
+    if (choice === 'open-in-new-window') {
+      await ipc.workspace.openInNewWindow(workspace.id)
+    }
+  }
+
   return (
     <div
       className={`workspace-item ${active ? 'active' : ''}`}
       onClick={onSelect}
+      onContextMenu={
+        ENABLE_WORKSPACE_OPEN_IN_NEW_WINDOW ? handleContextMenu : undefined
+      }
       title={workspace.path || workspace.id}
     >
       <div className="si-line1">
