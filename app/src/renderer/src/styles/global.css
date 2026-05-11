@@ -425,6 +425,12 @@ code, .mono {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  transition: background 80ms ease;
+}
+.tabs.drag-over {
+  /* drag tab 悬停目标 pane 时的高亮 */
+  background: rgba(191, 90, 242, 0.18);
+  border-bottom-color: rgba(191, 90, 242, 0.6);
 }
 /* 文件树 toggle(tab bar 最左,[+] 左边,pin 住) */
 .tab-filetree-toggle {
@@ -695,7 +701,23 @@ code, .mono {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  position: relative;            /* drop-zone-indicator absolute 定位用 */
 }
+
+/* drag tab 悬停 pane body 边缘时,显示一半 pane 大小的紫色半透明 overlay 提示新 pane 位置 */
+.drop-zone-indicator {
+  position: absolute;
+  pointer-events: none;          /* 不挡 drag 事件继续在 pane-body 上 */
+  background: rgba(191, 90, 242, 0.22);
+  border: 2px dashed rgba(191, 90, 242, 0.75);
+  z-index: 50;
+  transition: all 60ms ease;
+}
+.drop-zone-indicator.zone-left   { top: 0;   left: 0;   right: 50%; bottom: 0; }
+.drop-zone-indicator.zone-right  { top: 0;   left: 50%; right: 0;   bottom: 0; }
+.drop-zone-indicator.zone-top    { top: 0;   left: 0;   right: 0;   bottom: 50%; }
+.drop-zone-indicator.zone-bottom { top: 50%; left: 0;   right: 0;   bottom: 0; }
+.drop-zone-indicator.zone-center { top: 0;   left: 0;   right: 0;   bottom: 0; }
 .pane-empty {
   flex: 1;
   display: flex;

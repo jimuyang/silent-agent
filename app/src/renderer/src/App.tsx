@@ -12,6 +12,7 @@ import type { ContextMenuChoice } from './components/TabBar'
 import {
   appendTabToPane,
   closePane,
+  collapseEmptyPanes,
   findPaneOfTab,
   firstPane,
   moveTabToPane,
@@ -19,8 +20,10 @@ import {
   rootShallowEqual,
   setPaneActive,
   setSplitRatio,
+  splitPaneInsertTab,
   splitPaneWithTab,
 } from './lib/layout-tree'
+import type { DropZone } from './components/Pane'
 
 export default function App() {
   const { agent } = useAgent()
@@ -48,6 +51,32 @@ export default function App() {
   const [root, setRoot] = useState<LayoutNode | null>(null)
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null)
   const layoutLoadedRef = useRef(false)
+
+  // drag-drop 期间临时卸载 browser WC —— Electron WebContentsView 是 native overlay,
+  // 盖住 pane body 时会拦截 dragover/drop 事件。dragstart 时 setDragging(true) → TabContent
+  // 不渲染 BrowserPane → unmount 触发 hideTab → WC OFFSCREEN → React DOM 暴露,drag 事件
+  // 正常 fire。drag 结束后 setDragging(false) → 重 mount → setBoundsFor → WC 回原位。
+  //
+  // 监听 dragend(取消 drag)+ drop(成功 drop)双兜底:成功 drop 时源 tab 会因为 React
+  // 重渲染而 unmount(被移到别的 pane),dragend 事件可能丢失(源元素被删时不 fire);
+  // drop 事件 bubble 到 document 一定到,所以两个都听确保 dragging 一定能复位。
+  const [dragging, setDragging] = useState(false)
+  useEffect(() => {
+    const onDragStart = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('application/x-silent-tab')) {
+        setDragging(true)
+      }
+    }
+    const reset = () => setDragging(false)
+    document.addEventListener('dragstart', onDragStart)
+    document.addEventListener('dragend', reset)
+    document.addEventListener('drop', reset)
+    return () => {
+      document.removeEventListener('dragstart', onDragStart)
+      document.removeEventListener('dragend', reset)
+      document.removeEventListener('drop', reset)
+    }
+  }, [])
 
   // 1) workspace 切换:tabs 跟 layout 通过 useTabs 一次 IPC 原子拿回。
   //    onLayoutLoaded 在 setTabs 同一 .then 内被调,React 18 自动批处理 → setTabs 和 setRoot
@@ -301,6 +330,44 @@ export default function App() {
     /* root 变化的 useEffect 已经会落盘,无需额外动作 */
   }, [])
 
+  /** 跨 pane drag-drop:把 tab 从源 pane 移到目标 pane(同 pane 由 TabBar 内部 no-op) */
+  const onTabDrop = useCallback(
+    (toPaneId: string, payload: { tabId: string; fromPaneId: string }) => {
+      setRoot((prev) => {
+        if (!prev) return prev
+        // 显式 collapseEmptyPanes:moveTabToPane 可能让源 pane 变空,这里立即折叠,
+        // 不依赖 reconcile useEffect 时序去清理(避免短暂空 pane 闪现 / 时序 race 漏 fold)
+        return collapseEmptyPanes(moveTabToPane(prev, toPaneId, payload.tabId))
+      })
+      setFocusedPaneId(toPaneId)
+    },
+    [],
+  )
+
+  /** drag-drop 落在 pane body 4 边 → 在该边拆出新 pane 装这个 tab */
+  const onTabDropSplit = useCallback(
+    (toPaneId: string, zone: DropZone, payload: { tabId: string; fromPaneId: string }) => {
+      const direction: 'row' | 'column' =
+        zone === 'left' || zone === 'right' ? 'row' : 'column'
+      const position: 'before' | 'after' =
+        zone === 'left' || zone === 'top' ? 'before' : 'after'
+      setRoot((prev) => {
+        if (!prev) return prev
+        const { root: nextRoot, newPaneId } = splitPaneInsertTab(
+          prev,
+          toPaneId,
+          direction,
+          position,
+          payload.tabId,
+        )
+        queueMicrotask(() => setFocusedPaneId(newPaneId))
+        // 同上:splitPaneInsertTab 可能把源 pane 掏空,立即 fold,不靠 reconcile 兜底
+        return collapseEmptyPanes(nextRoot)
+      })
+    },
+    [],
+  )
+
   // ============ 新 tab/file/terminal/browser:进 focused pane ============
   // useTabs 内部会 setActiveTabId(newTab.id),触发 reconcile 把新 tab 落到 focused pane
 
@@ -363,6 +430,7 @@ export default function App() {
                 allTabs={tabs}
                 workspaceId={workspaceId}
                 primaryPaneId={primaryPaneId}
+                dragging={dragging}
                 fileTreeOpen={fileTreeOpen}
                 onToggleFileTree={() => setFileTreeOpen((x) => !x)}
                 onActivateTab={onActivateTab}
@@ -371,6 +439,8 @@ export default function App() {
                 onContextMenuAction={onContextMenuAction}
                 onSplitRight={onSplitRightFromButton}
                 onSplitDown={onSplitDownFromButton}
+                onTabDrop={onTabDrop}
+                onTabDropSplit={onTabDropSplit}
                 onOpenBrowser={async (paneId, url) => {
                   setFocusedPaneId(paneId)
                   const newTab = await openBrowser(url)

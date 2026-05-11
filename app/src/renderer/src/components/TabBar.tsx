@@ -5,6 +5,12 @@ import { ipc } from '../lib/ipc'
 /** 上层(App)在 context menu 选择后要执行的语义动作 */
 export type ContextMenuChoice = 'split-right' | 'split-down' | 'close' | null
 
+/** drag-drop tab 跨 pane:从源 pane 取走 tab,放到目标 pane */
+export interface TabDropPayload {
+  tabId: string
+  fromPaneId: string
+}
+
 interface TabBarProps {
   /** 已经按 pane.tabIds 过滤好,顺序就是渲染顺序(per-pane TabBar) */
   tabs: TabMeta[]
@@ -29,6 +35,8 @@ interface TabBarProps {
   onSplitRight: () => void
   /** "⊟ 拆下"按钮(纵向分栏) */
   onSplitDown: () => void
+  /** 接收跨 pane drop —— payload.fromPaneId 是源,this paneId 是目标 */
+  onTabDrop: (payload: TabDropPayload) => void
 }
 
 type NewMode = null | 'browser-url' | 'file-new-name'
@@ -50,10 +58,44 @@ export default function TabBar({
   onNewFile,
   onSplitRight,
   onSplitDown,
+  onTabDrop,
 }: TabBarProps) {
   const [mode, setMode] = useState<NewMode>(null)
   const [url, setUrl] = useState('')
+  const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  /** 解析 dataTransfer。返回 null 表示不是我们的 tab drag(忽略) */
+  function parseTabPayload(e: React.DragEvent): TabDropPayload | null {
+    const raw = e.dataTransfer.getData('application/x-silent-tab')
+    if (!raw) return null
+    try {
+      const p = JSON.parse(raw) as TabDropPayload
+      if (typeof p.tabId !== 'string' || typeof p.fromPaneId !== 'string') return null
+      return p
+    } catch {
+      return null
+    }
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    // 必须 preventDefault 才会触发 drop;dropEffect=move 让光标显示移动而非复制
+    if (e.dataTransfer.types.includes('application/x-silent-tab')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      if (!dragOver) setDragOver(true)
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    const payload = parseTabPayload(e)
+    setDragOver(false)
+    if (!payload) return
+    e.preventDefault()
+    // 同 pane 拖回:no-op(MVP 不做同 pane 重排序)
+    if (payload.fromPaneId === paneId) return
+    onTabDrop(payload)
+  }
 
   useEffect(() => {
     if (mode === 'browser-url' || mode === 'file-new-name') inputRef.current?.focus()
@@ -114,7 +156,13 @@ export default function TabBar({
   }
 
   return (
-    <div className="tabs" data-pane-id={paneId}>
+    <div
+      className={`tabs ${dragOver ? 'drag-over' : ''}`}
+      data-pane-id={paneId}
+      onDragOver={handleDragOver}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+    >
       {showFileTreeToggle && (
         <button
           className={`tab-filetree-toggle ${fileTreeOpen ? 'active' : ''}`}

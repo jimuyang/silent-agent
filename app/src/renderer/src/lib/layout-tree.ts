@@ -238,6 +238,47 @@ export function splitPaneWithTab(
 }
 
 /**
+ * Drag-drop 拆分:从任意源 pane 拿出 tabId,在目标 pane 的指定方向上拆出新 pane 装它。
+ *
+ * direction:'row'(横向拆) / 'column'(纵向拆)
+ * position: 'before'(新 pane 在左/上) / 'after'(新 pane 在右/下)
+ *
+ * 跟 splitPaneWithTab 区别:这个允许跨 pane(源 pane ≠ 目标 pane)。先 removeTabFromTree
+ * 把 tabId 从树中所有出现去掉,然后在目标 pane 处插 split。
+ */
+export function splitPaneInsertTab(
+  root: LayoutNode,
+  targetPaneId: string,
+  direction: 'row' | 'column',
+  position: 'before' | 'after',
+  tabId: string,
+): { root: LayoutNode; newPaneId: string } {
+  const newPid = newPaneId()
+  const sid = newSplitId()
+  const without = removeTabFromTree(root, tabId)
+
+  const replace = (node: LayoutNode): LayoutNode => {
+    if (node.kind === 'pane') {
+      if (node.pane.id !== targetPaneId) return node
+      const newPane: PaneMeta = { id: newPid, tabIds: [tabId], activeTabId: tabId }
+      const targetWrapped: LayoutNode = { kind: 'pane', pane: node.pane }
+      const newWrapped: LayoutNode = { kind: 'pane', pane: newPane }
+      const split: SplitMeta = { id: sid, direction, ratio: 0.5 }
+      const children: [LayoutNode, LayoutNode] =
+        position === 'before' ? [newWrapped, targetWrapped] : [targetWrapped, newWrapped]
+      return { kind: 'split', split, children }
+    }
+    return {
+      kind: 'split',
+      split: node.split,
+      children: [replace(node.children[0]), replace(node.children[1])],
+    }
+  }
+
+  return { root: replace(without), newPaneId: newPid }
+}
+
+/**
  * 把某个 tab 移到目标 pane(全树范围 dedupe + 强制移动)。
  *
  * 用例:用户在 pane X 点 + 开新 tab,reconcile 可能把 newTab 落到 focusedPane(若 focused

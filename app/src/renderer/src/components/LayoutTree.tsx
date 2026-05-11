@@ -7,7 +7,8 @@
 import { useCallback, useRef } from 'react'
 import type { LayoutNode, TabMeta } from '@shared/types'
 import Pane from './Pane'
-import type { ContextMenuChoice } from './TabBar'
+import type { ContextMenuChoice, TabDropPayload } from './TabBar'
+import type { DropZone } from './Pane'
 
 export interface LayoutTreeProps {
   node: LayoutNode
@@ -15,6 +16,8 @@ export interface LayoutTreeProps {
   workspaceId: string
   /** 在整棵树里,哪个 pane 是主 pane(承载 file tree toggle / [+] 等工作区控件) */
   primaryPaneId: string | null
+  /** drag-drop 进行中 — true 时所有 browser tab 暂时卸载,让 native overlay 不挡 drag 事件 */
+  dragging: boolean
   fileTreeOpen?: boolean
   onToggleFileTree?: () => void
 
@@ -29,6 +32,10 @@ export interface LayoutTreeProps {
   onOpenTerminal: (paneId: string) => Promise<void>
   onOpenFile: (paneId: string) => Promise<void>
   onNewFile: (paneId: string, filename: string) => Promise<void>
+  /** 跨 pane drag-drop tab → 移到 toPaneId */
+  onTabDrop: (toPaneId: string, payload: TabDropPayload) => void
+  /** drag-drop tab 到目标 pane 的 4 边 → 在该边拆出新 pane 装这个 tab */
+  onTabDropSplit: (toPaneId: string, zone: DropZone, payload: TabDropPayload) => void
 
   // split 操作
   onSplitRatioChange: (splitId: string, ratio: number) => void
@@ -46,6 +53,7 @@ export default function LayoutTree(props: LayoutTreeProps) {
         allTabs={props.allTabs}
         workspaceId={props.workspaceId}
         isPrimary={isPrimary}
+        dragging={props.dragging}
         fileTreeOpen={props.fileTreeOpen}
         onToggleFileTree={props.onToggleFileTree}
         onActivateTab={(tid) => props.onActivateTab(node.pane.id, tid)}
@@ -60,6 +68,8 @@ export default function LayoutTree(props: LayoutTreeProps) {
         onOpenTerminal={() => props.onOpenTerminal(node.pane.id)}
         onOpenFile={() => props.onOpenFile(node.pane.id)}
         onNewFile={(name) => props.onNewFile(node.pane.id, name)}
+        onTabDrop={(payload) => props.onTabDrop(node.pane.id, payload)}
+        onTabDropSplit={(zone, payload) => props.onTabDropSplit(node.pane.id, zone, payload)}
       />
     )
   }
