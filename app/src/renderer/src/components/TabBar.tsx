@@ -2,13 +2,25 @@ import { useEffect, useRef, useState } from 'react'
 import type { BrowserTabState, TabMeta } from '@shared/types'
 import { ipc } from '../lib/ipc'
 
-/** 上层(App)在 context menu 选择后要执行的语义动作 */
-export type ContextMenuChoice = 'split-right' | 'split-down' | 'detach' | 'close' | null
+/**
+ * 上层(App)在 context menu 选择后要执行的语义动作。
+ * 也复用给 drag-end 的非菜单触发(detach / cross-window-moved)。
+ */
+export type ContextMenuChoice =
+  | 'split-right'
+  | 'split-down'
+  | 'detach'
+  | 'close'
+  /** 跨 window drop:目标 window 已 add,源端要 remove 本地 root 里的这个 tab */
+  | 'cross-window-moved'
+  | null
 
 /** drag-drop tab 跨 pane:从源 pane 取走 tab,放到目标 pane */
 export interface TabDropPayload {
   tabId: string
   fromPaneId: string
+  /** 源 tab 所在的 workspace。跨 workspace 拖拽禁止 — 各窗口绑死一个 workspace */
+  fromWorkspaceId: string
 }
 
 interface TabBarProps {
@@ -16,6 +28,8 @@ interface TabBarProps {
   tabs: TabMeta[]
   activeTabId: string | null
   paneId: string
+  /** 本 TabBar 所属 workspace —— drag dataTransfer 标 fromWorkspaceId,drop 端比对拒绝跨 ws */
+  workspaceId: string
 
   /** 是否显示文件树 toggle 按钮(只在主 pane) */
   showFileTreeToggle?: boolean
@@ -45,6 +59,7 @@ export default function TabBar({
   tabs,
   activeTabId,
   paneId,
+  workspaceId,
   showFileTreeToggle = false,
   showNewTabButton = false,
   fileTreeOpen = false,
@@ -71,7 +86,12 @@ export default function TabBar({
     if (!raw) return null
     try {
       const p = JSON.parse(raw) as TabDropPayload
-      if (typeof p.tabId !== 'string' || typeof p.fromPaneId !== 'string') return null
+      if (
+        typeof p.tabId !== 'string' ||
+        typeof p.fromPaneId !== 'string' ||
+        typeof p.fromWorkspaceId !== 'string'
+      )
+        return null
       return p
     } catch {
       return null
@@ -92,6 +112,11 @@ export default function TabBar({
     setDragOver(false)
     if (!payload) return
     e.preventDefault()
+    // 跨 workspace 拖拽拒绝 — 每个 window 严格绑定一个 workspace
+    if (payload.fromWorkspaceId !== workspaceId) {
+      console.warn('[TabBar] reject cross-workspace drop:', payload.fromWorkspaceId, '→', workspaceId)
+      return
+    }
     // 同 pane 拖回:no-op(MVP 不做同 pane 重排序)
     if (payload.fromPaneId === paneId) return
     onTabDrop(payload)
@@ -235,20 +260,30 @@ export default function TabBar({
               e.dataTransfer.effectAllowed = 'move'
               e.dataTransfer.setData(
                 'application/x-silent-tab',
-                JSON.stringify({ tabId: t.id, fromPaneId: paneId }),
+                JSON.stringify({
+                  tabId: t.id,
+                  fromPaneId: paneId,
+                  fromWorkspaceId: workspaceId,
+                }),
               )
             }}
             onDragEnd={(e) => {
-              // 没成功 drop 进任何 zone 且鼠标落在窗口外 → detach 到新 BrowserWindow。
-              // dropEffect 'none' = 既没被 TabBar / pane body 接住,也没被取消(Esc 也是 'none',
-              // 但 Esc 时鼠标在窗口内 → 不触发)
-              if (e.dataTransfer.dropEffect !== 'none') return
-              // silent-chat / pinned 不允许 detach(同右键菜单一致)
+              // silent-chat / pinned 不参与 detach / 跨 window 移动(同右键菜单)
               if (t.pinned || t.type === 'silent-chat') return
               const { clientX: x, clientY: y } = e
               const outOfWindow =
                 x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight
-              if (outOfWindow) onContextMenuAction('detach', t.id)
+              const dropEffect = e.dataTransfer.dropEffect
+              if (dropEffect === 'none' && outOfWindow) {
+                // 没人接住 + 鼠标在源 window 外 → 拖到桌面/别的非 silent-agent 区域,起新 window
+                onContextMenuAction('detach', t.id)
+              } else if (dropEffect === 'move' && outOfWindow) {
+                // 目标 window 接住了(Electron 把跨 BrowserWindow 的 drop 投递过去),
+                // 但源端的 drop 事件根本没 fire → 源 root 还留着这个 tab → 手动 remove。
+                // 同 window 内 pane↔pane 拖放走的是 drop event(handleDrop / handleBodyDrop),
+                // 那条路径走 moveTabToPane 已经 remove,这里 outOfWindow=false 不会触发。
+                onContextMenuAction('cross-window-moved', t.id)
+              }
             }}
           >
             <span className="tab-name">

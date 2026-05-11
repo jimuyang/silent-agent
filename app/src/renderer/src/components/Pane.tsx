@@ -84,7 +84,12 @@ export default function Pane(props: PaneProps) {
     if (!raw) return null
     try {
       const p = JSON.parse(raw) as TabDropPayload
-      if (typeof p.tabId !== 'string' || typeof p.fromPaneId !== 'string') return null
+      if (
+        typeof p.tabId !== 'string' ||
+        typeof p.fromPaneId !== 'string' ||
+        typeof p.fromWorkspaceId !== 'string'
+      )
+        return null
       return p
     } catch {
       return null
@@ -110,6 +115,11 @@ export default function Pane(props: PaneProps) {
     setDropZone(null)
     if (!payload || !zone) return
     e.preventDefault()
+    // 跨 workspace 拖拽拒绝 — 每个 window 严格绑定一个 workspace
+    if (payload.fromWorkspaceId !== workspaceId) {
+      console.warn('[Pane] reject cross-workspace drop:', payload.fromWorkspaceId, '→', workspaceId)
+      return
+    }
     if (zone === 'center') {
       // 中间 = 移动到这个 pane(同 TabBar drop;同 pane 内 no-op)
       if (payload.fromPaneId !== pane.id) props.onTabDrop(payload)
@@ -125,6 +135,7 @@ export default function Pane(props: PaneProps) {
         tabs={tabs}
         activeTabId={pane.activeTabId}
         paneId={pane.id}
+        workspaceId={workspaceId}
         showFileTreeToggle={props.isPrimary}
         showNewTabButton={props.isPrimary}
         fileTreeOpen={props.fileTreeOpen}
