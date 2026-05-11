@@ -18,11 +18,18 @@ export interface UseTabsResult {
 
 export interface UseTabsOptions {
   /**
-   * workspace 切换时,layout 跟 tabs 一起从 main 一次拿回。本回调在 setTabs 同一个 .then
-   * 内被调,React 18 自动批处理这次同步状态更新 → setTabs / setRoot 在一个渲染提交内完成,
-   * 杜绝 layout 和 tabs 的并发 IPC race(以前是两条独立 IPC,谁先回不定 → reconcile 把 saved tree 误清)。
+   * workspace 切换:tabs + layout 一次 IPC 拿回。回调里同时收到 layout 和 tabs list。
+   *
+   * 之前期望 setTabs + setRoot 走 React 18 auto-batching 一起 commit,实测 **不可靠**:
+   * Electron IPC 跨进程 resolve 的 promise 在某些时序下,setTabs(useTabs 内)和 setRoot
+   * (App 内 via onLayoutLoaded)会 commit 到不同 render,导致 setRoot 后 reconcile useEffect
+   * 触发但 `tabs` state 还是空的(refs 也跟着是空)→ cleanNode 把刚 onLayoutLoaded 写进的 detached
+   * pane.tabIds 全摘掉 → persist 写空 pane → detached window 看不到 tab。
+   *
+   * 所以把 `list` 一并传过去,App 端在 onLayoutLoaded 里**手动 seed `tabsRef.current = list`**,
+   * 不依赖 setTabs 的 commit 节奏。
    */
-  onLayoutLoaded?: (layout: WorkspaceLayout) => void
+  onLayoutLoaded?: (layout: WorkspaceLayout, tabs: TabMeta[]) => void
 }
 
 /**
@@ -63,8 +70,8 @@ export function useTabs(
         setTabs(list)
         const silent = list.find((t) => t.type === 'silent-chat')
         setActiveTabId(silent?.id ?? list[0]?.id ?? null)
-        // 同 .then 内调 callback → setRoot 在同一 microtask,React 18 自动批处理
-        onLayoutLoaded?.(layout)
+        // 传 list 一起过去:App 端 seed tabsRef,不依赖 setTabs 的 commit 时机
+        onLayoutLoaded?.(layout, list)
       })
       .catch((e) => console.error('[useTabs] switchWorkspace', e))
     return () => {

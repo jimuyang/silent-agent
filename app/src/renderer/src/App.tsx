@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { LayoutNode, WorkspaceLayout } from '@shared/types'
+import type { LayoutNode, TabMeta, WorkspaceLayout } from '@shared/types'
 import { MAIN_WINDOW_ID } from '@shared/consts'
 import LeftNav from './components/LeftNav'
 import LayoutTree from './components/LayoutTree'
@@ -102,14 +102,25 @@ export default function App({
     }
   }, [])
 
-  // 1) workspace 切换:tabs 跟 layout 通过 useTabs 一次 IPC 原子拿回。
-  //    onLayoutLoaded 在 setTabs 同一 .then 内被调,React 18 自动批处理 → setTabs 和 setRoot
-  //    在同一渲染提交内完成 → 杜绝 race(以前两条独立 IPC,layout 先回时 reconcile 用空 tabs 把 saved tree 误清空)。
+  // === refs:reconcile 用最新值,绕开 useEffect 闭包的 stale snapshot 问题 ===
   //
-  // 多窗口模型(Phase B/C):layout.windows[] 数组,按 windowId 取自己那条
+  // 背景:reconcile useEffect 的闭包(tabs / focusedPaneId)是调度时的 snapshot,但
+  // setRoot 的 functional updater 的 prev 是执行时的最新 state。两者错位会让 cleanNode
+  // 拿"旧 tabs + 新 prev"运行,把 onLayoutLoaded 写进的 pane.tabIds 当 stale 摘掉。
+  //
+  // 用 ref + render-phase 写入,**但仍不够**:setRoot 和 setTabs 跨 Electron IPC promise
+  // 不一定 batch,setRoot 先 commit 时,tabsRef 也没更新到 list。所以 onLayoutLoaded
+  // 还要**手动 seed tabsRef.current = list**(在 setRoot 之前),双保险。
+  const tabsRef = useRef<TabMeta[]>([])
+  const focusedPaneIdRef = useRef<string | null>(null)
+
+  // 1) workspace 切换:tabs 跟 layout 通过 useTabs 一次 IPC 原子拿回。
+  //    多窗口模型(Phase B/C):layout.windows[] 数组,按 windowId 取自己那条
   const onLayoutLoaded = useCallback(
-    (layout: WorkspaceLayout) => {
+    (layout: WorkspaceLayout, list: TabMeta[]) => {
       const myWin = layout.windows.find((w) => w.id === windowId) ?? null
+      // 关键:seed tabsRef,防止 reconcile 在 setTabs commit 之前跑、把 myWin.root.tabIds 摘空
+      tabsRef.current = list
       setRoot(myWin?.root ?? null)
       layoutLoadedRef.current = true
     },
@@ -127,17 +138,25 @@ export default function App({
     close: closeTab,
   } = useTabs(activeWorkspaceId, { onLayoutLoaded })
 
+  // render-phase 同步 ref。**关键 guard**:不能用空 tabs 覆盖 onLayoutLoaded 刚 seed 的非空 list。
+  // 时序:onLayoutLoaded seed = list → setRoot 触发 re-render → 此时 setTabs(list) 可能还没 commit
+  // (Electron IPC 跨 batch),所以 `tabs` state 在这次 re-render 里还是 `[]` → 如果无脑覆盖,
+  // 就把 seed 抹掉了 → reconcile 又拿到空 ref → 老 bug 复现。
+  // workspace 有 silent-chat pinned,正常状态下 tabs.length 永远 ≥ 1;空 = 状态没就绪,保留 seed。
+  if (tabs.length > 0) tabsRef.current = tabs
+  focusedPaneIdRef.current = focusedPaneId
+
   // workspace 切换时重置 layoutLoadedRef(下次 onLayoutLoaded 触发再变 true)
   useEffect(() => {
     layoutLoadedRef.current = false
     if (!activeWorkspaceId) setRoot(null)
   }, [activeWorkspaceId])
 
-  // 2) tabs 变化 → reconcile 树(派生默认 / 移除 stale / 新 tab 进 focused / 折叠空 pane)
+  // 2) tabs 变化 → reconcile 树(移除 stale / 折叠空 pane)
   useEffect(() => {
     if (!activeWorkspaceId) return
     setRoot((prev) => {
-      const reconciled = reconcileTree(prev, tabs, focusedPaneId)
+      const reconciled = reconcileTree(prev, tabsRef.current, focusedPaneIdRef.current)
       return prev && rootShallowEqual(prev, reconciled) ? prev : reconciled
     })
   }, [tabs, focusedPaneId, activeWorkspaceId])
